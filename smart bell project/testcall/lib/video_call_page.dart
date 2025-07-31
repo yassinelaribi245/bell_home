@@ -24,9 +24,14 @@ class _VideoCallPageState extends State<VideoCallPage> {
   bool _isCallActive = false;
   bool _isMuted = false;
   List<String> _debugLogs = [];
+  
+  // NEW: Camera control states
+  bool _isCameraOn = false;
+  bool _isCameraOnline = false;
+  String _cameraStatus = 'Offline';
 
   // Configuration - UPDATE THIS URL
-  final String signalingServerUrl = 'https://c8eeb122-7274-4c11-9f14-b7fa09b317a3-00-2mmvsplajbe9g.kirk.replit.dev';
+  final String signalingServerUrl = 'https://b626468b61a3.ngrok-free.app';
 
   @override
   void initState() {
@@ -85,64 +90,108 @@ class _VideoCallPageState extends State<VideoCallPage> {
       _addDebugLog('✅ Connected to signaling server');
       _updateStatus('Connected - setting up call...');
       
-      // Join room as mobile client
+      // Set camera online but not active yet
+      setState(() {
+        _isCameraOnline = true;
+        _cameraStatus = 'Online'; // Online but not active until turned on
+      });
+      
+      // Join room as camera device
       socket!.emit('join_room', {
         'room': widget.cameraCode,
-        'client_type': 'mobile'
+        'client_type': 'camera'
       });
-      _addDebugLog('📱 Joining room: ${widget.cameraCode} as mobile client');
+      _addDebugLog('📹 Joining room: ${widget.cameraCode} as camera device');
       
-      // Setup peer connection and local audio immediately
-      await _setupPeerConnection();
-      await _startLocalAudio();
+      // Report camera status to update database
+      _reportCameraStatus();
+      
+      // Also report camera as connected to database
+      _reportCameraConnected();
     });
 
     socket!.onConnectError((err) {
-      _addDebugLog('❌ Socket connect error: $err');
-      _updateStatus('Connect Error');
+      _addDebugLog('❌ Connection error: $err');
+      _updateStatus('Connection Error');
+      _setCameraOffline();
     });
-    
-    socket!.onError((err) {
-      _addDebugLog('❌ Socket error: $err');
-    });
-    
-    socket!.onDisconnect((reason) {
-      _addDebugLog('🔌 Socket disconnected: $reason');
+
+    socket!.onDisconnect((_) {
+      _addDebugLog('❌ Disconnected from server');
       _updateStatus('Disconnected');
+      _setCameraOffline();
+      
+      // Report camera disconnected to database
+      _reportCameraDisconnected();
     });
 
-    // Room events
-    socket!.on('joined_room', (data) {
-      _addDebugLog('🏠 Successfully joined room: ${data['room']}');
-      _updateStatus('Waiting for camera...');
+    // NEW: Handle incoming call requests from main app
+    socket!.on('incoming_call', (data) {
+      _addDebugLog('📞 Incoming call request from main app');
+      _handleIncomingCall(data);
     });
 
-    socket!.on('camera_available', (data) {
-      _addDebugLog('📹 Camera is available and ready');
-      _updateStatus('Camera ready - waiting for call...');
+    // NEW: Handle camera status requests
+    socket!.on('get_camera_status', (data) {
+      _addDebugLog('📊 Camera status requested');
+      _reportCameraStatus();
+      
+      // NEW: Send direct response to main app
+      socket!.emit('camera_status_response', {
+        'camera_code': widget.cameraCode,
+        'is_online': _isCameraOnline,
+        'is_camera_on': _isCameraOn,
+        'status': _cameraStatus,
+        'timestamp': DateTime.now().toIso8601String(),
+      });
+      _addDebugLog('📊 Camera status response sent to main app');
     });
 
-    // WebRTC signaling events
-    socket!.on('offer', (data) async {
-      _addDebugLog('📞 Received offer from camera');
-      try {
-        await _handleOffer(data);
-      } catch (e) {
-        _addDebugLog('❌ Error handling offer: $e');
+    // NEW: Handle camera control commands
+    socket!.on('camera_control', (data) {
+      _addDebugLog('🎛️ [SOCKET EVENT] Camera control command: $data');
+      final command = data['command'] ?? '';
+      _handleCameraControl(command);
+    });
+
+    // NEW: Handle turn on camera command
+    socket!.on('turn_on_camera', (data) {
+      _addDebugLog('🎛️ [SOCKET EVENT] Turn on camera command received: $data');
+      final cameraCode = data['camera_code'] ?? '';
+      
+      if (cameraCode == widget.cameraCode) {
+        _turnCameraOn();
+        
+        // Send response back to main app
+        socket!.emit('camera_turned_on', {
+          'camera_code': widget.cameraCode,
+          'success': true,
+          'message': 'Camera turned on successfully',
+          'timestamp': DateTime.now().toIso8601String(),
+        });
+        
+        _addDebugLog('🎛️ Camera turned on and response sent');
       }
+    });
+
+    // WebRTC events
+    socket!.on('offer', (data) async {
+      _addDebugLog('📥 Received offer from mobile client');
+      await _handleOffer(data);
     });
 
     socket!.on('ice_candidate', (data) async {
-      _addDebugLog('🧊 Received ICE candidate from camera');
-      try {
-        await _handleIceCandidate(data);
-      } catch (e) {
-        _addDebugLog('❌ Error handling ICE candidate: $e');
-      }
+      _addDebugLog('🧊 Received ICE candidate from mobile client');
+      await _handleIceCandidate(data);
     });
 
-    socket!.on('call_ended', (data) {
-      _addDebugLog('📞 Call ended by ${data['ended_by']}');
+    socket!.on('answer', (data) async {
+      _addDebugLog('📥 Received answer from mobile client');
+      await _handleAnswer(data);
+    });
+
+    socket!.on('end_call', (data) {
+      _addDebugLog('📞 Call ended by mobile client');
       _endCall();
     });
   }
@@ -200,7 +249,7 @@ class _VideoCallPageState extends State<VideoCallPage> {
     // ICE candidate handling
     _peerConnection!.onIceCandidate = (candidate) {
       if (candidate.candidate != null) {
-        _addDebugLog('🧊 Sending ICE candidate to camera');
+        _addDebugLog('🧊 Sending ICE candidate to mobile client');
         socket!.emit('ice_candidate', {
           'room': widget.cameraCode,
           'candidate': candidate.candidate,
@@ -290,7 +339,7 @@ class _VideoCallPageState extends State<VideoCallPage> {
 
   Future<void> _handleOffer(dynamic data) async {
     try {
-      _addDebugLog('📞 Processing offer from camera...');
+      _addDebugLog('📞 Processing offer from mobile client...');
       _addDebugLog('📄 Offer SDP type: ${data['sdp']['type']}');
       
       final offer = RTCSessionDescription(data['sdp']['sdp'], data['sdp']['type']);
@@ -338,7 +387,7 @@ class _VideoCallPageState extends State<VideoCallPage> {
         'room': widget.cameraCode,
         'sdp': answer.toMap()
       });
-      _addDebugLog('📤 Answer sent to camera');
+      _addDebugLog('📤 Answer sent to mobile client');
       
     } catch (e) {
       _addDebugLog('❌ Error creating/sending answer: $e');
@@ -410,6 +459,198 @@ class _VideoCallPageState extends State<VideoCallPage> {
     }
   }
 
+  // NEW: Report camera status to server
+  void _reportCameraStatus() {
+    if (socket?.connected == true) {
+      final status = {
+        'camera_code': widget.cameraCode,
+        'is_online': _isCameraOnline,
+        'is_camera_on': _isCameraOn,
+        'status': _cameraStatus,
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+      
+      socket!.emit('camera_status_update', status);
+      _addDebugLog('📊 Camera status reported: $_cameraStatus');
+    }
+  }
+
+  // NEW: Report camera connected to database
+  void _reportCameraConnected() {
+    if (socket?.connected == true) {
+      final connectionData = {
+        'camera_code': widget.cameraCode,
+        'is_online': true,
+        'is_camera_on': _isCameraOn,
+        'status': 'online',
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+      
+      socket!.emit('camera_status_update', connectionData);
+      _addDebugLog('🗄️ Camera connected status reported to database');
+    }
+  }
+
+  // NEW: Report camera disconnected to database
+  void _reportCameraDisconnected() {
+    if (socket?.connected == true) {
+      final disconnectedData = {
+        'camera_code': widget.cameraCode,
+        'is_online': false,
+        'is_camera_on': _isCameraOn,
+        'status': 'offline',
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+      socket!.emit('camera_status_update', disconnectedData);
+      _addDebugLog('🗄️ Camera disconnected status reported to database');
+    }
+  }
+
+  // NEW: Report camera active to database
+  void _reportCameraActive() {
+    if (socket?.connected == true) {
+      final activeData = {
+        'camera_code': widget.cameraCode,
+        'is_online': _isCameraOnline,
+        'is_camera_on': true,
+        'status': 'active',
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+      socket!.emit('camera_status_update', activeData);
+      _addDebugLog('🗄️ Camera active status reported to database');
+    }
+  }
+
+  // NEW: Report camera inactive to database
+  void _reportCameraInactive() {
+    if (socket?.connected == true) {
+      final inactiveData = {
+        'camera_code': widget.cameraCode,
+        'is_online': _isCameraOnline,
+        'is_camera_on': false,
+        'status': 'inactive',
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+      socket!.emit('camera_status_update', inactiveData);
+      _addDebugLog('🗄️ Camera inactive status reported to database');
+    }
+  }
+
+  // NEW: Set camera offline
+  void _setCameraOffline() {
+    setState(() {
+      _isCameraOnline = false;
+      _cameraStatus = 'Offline';
+    });
+    _reportCameraStatus();
+  }
+
+  // NEW: Handle incoming call from main app
+  void _handleIncomingCall(data) {
+    if (!_isCameraOn) {
+      _addDebugLog('❌ Cannot accept call - camera is off');
+      socket!.emit('call_rejected', {
+        'camera_code': widget.cameraCode,
+        'reason': 'camera_off',
+        'timestamp': DateTime.now().toIso8601String(),
+      });
+      return;
+    }
+
+    _addDebugLog('✅ Accepting incoming call');
+    socket!.emit('call_accepted', {
+      'camera_code': widget.cameraCode,
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+    
+    // Setup peer connection for the call
+    _setupPeerConnection();
+  }
+
+  // NEW: Handle camera control commands
+  void _handleCameraControl(String command) {
+    switch (command) {
+      case 'turn_on':
+        _turnCameraOn();
+        break;
+      case 'turn_off':
+        _turnCameraOff();
+        break;
+      case 'toggle':
+        if (_isCameraOn) {
+          _turnCameraOff();
+        } else {
+          _turnCameraOn();
+        }
+        break;
+      default:
+        _addDebugLog('❌ Unknown camera control command: $command');
+    }
+  }
+
+  // NEW: Turn camera on
+  void _turnCameraOn() {
+    setState(() {
+      _isCameraOn = true;
+      _cameraStatus = 'Active';
+    });
+    _addDebugLog('✅ Camera turned ON - Status: Active');
+    _reportCameraStatus();
+    
+    // Also report camera as active to database
+    _reportCameraActive();
+    
+    // NEW: Send control response to main app
+    socket!.emit('camera_control_response', {
+      'camera_code': widget.cameraCode,
+      'command': 'turn_on',
+      'success': true,
+      'message': 'Camera turned on successfully',
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+  }
+
+  // NEW: Turn camera off
+  void _turnCameraOff() {
+    setState(() {
+      _isCameraOn = false;
+      _cameraStatus = 'Inactive';
+    });
+    _addDebugLog('❌ Camera turned OFF - Status: Inactive');
+    _reportCameraStatus();
+    
+    // Also report camera as inactive to database
+    _reportCameraInactive();
+    
+    // NEW: Send control response to main app
+    socket!.emit('camera_control_response', {
+      'camera_code': widget.cameraCode,
+      'command': 'turn_off',
+      'success': true,
+      'message': 'Camera turned off successfully',
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+    
+    // End any active call
+    if (_isCallActive) {
+      _endCall();
+    }
+  }
+
+  // NEW: Ring bell function (for testing)
+  void _ringBell() {
+    if (!_isCameraOn) {
+      _addDebugLog('❌ Cannot ring bell - camera is off');
+      return;
+    }
+    
+    _addDebugLog('🔔 Ringing bell...');
+    socket!.emit('ring_bell', {
+      'camera_code': widget.cameraCode,
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+  }
+
   @override
   void dispose() {
     _endCall();
@@ -423,37 +664,144 @@ class _VideoCallPageState extends State<VideoCallPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Video Call - ${widget.cameraCode}'),
-        backgroundColor: Colors.green,
+        title: Text('Camera Simulator - ${widget.cameraCode}'),
+        backgroundColor: _isCameraOn ? Colors.green : Colors.red,
         foregroundColor: Colors.white,
         actions: [
-          Icon(
-            _isCallActive ? Icons.videocam : Icons.videocam_off,
-            color: _isCallActive ? Colors.white : Colors.grey,
+          // Camera status indicator
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: _isCameraOn ? Colors.green.shade700 : Colors.red.shade700,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              _isCameraOn ? 'ON' : 'OFF',
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
           ),
           const SizedBox(width: 16),
         ],
       ),
       body: Column(
         children: [
-          // Status bar
+          // Camera status bar
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(12),
-            color: _isCallActive ? Colors.green.shade100 : Colors.orange.shade100,
+            color: _isCameraOn ? Colors.green.shade100 : Colors.red.shade100,
             child: Column(
               children: [
-                Text(
-                  _connectionStatus,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Camera Status: $_cameraStatus',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                        color: _isCameraOn ? Colors.green.shade800 : Colors.red.shade800,
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: _isCameraOnline ? Colors.green : Colors.red,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        _isCameraOnline ? 'ONLINE' : 'OFFLINE',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 10,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'ICE: $_iceConnectionState | Camera: ${widget.cameraCode}',
+                  'Connection: $_connectionStatus | ICE: $_iceConnectionState',
                   style: const TextStyle(fontSize: 12),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Camera: ${_isCameraOn ? "ACTIVE" : "INACTIVE"}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: _isCameraOn ? Colors.green.shade700 : Colors.red.shade700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
+          // Camera controls
+          Container(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                // Camera On/Off Toggle
+                ElevatedButton.icon(
+                  onPressed: () {
+                    if (_isCameraOn) {
+                      _turnCameraOff();
+                    } else {
+                      _turnCameraOn();
+                    }
+                  },
+                  icon: Icon(_isCameraOn ? Icons.videocam_off : Icons.videocam),
+                  label: Text(_isCameraOn ? 'Turn Off' : 'Turn On'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _isCameraOn ? Colors.red : Colors.green,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  ),
+                ),
+                
+                // Ring Bell Button
+                ElevatedButton.icon(
+                  onPressed: _isCameraOn ? _ringBell : null,
+                  icon: const Icon(Icons.notifications_active),
+                  label: const Text('Ring Bell'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _isCameraOn ? Colors.orange : Colors.grey,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  ),
+                ),
+                
+                // Call Status
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: _isCallActive ? Colors.blue : Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _isCallActive ? Icons.call : Icons.call_end,
+                        color: _isCallActive ? Colors.white : Colors.grey.shade600,
+                        size: 16,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        _isCallActive ? 'In Call' : 'Idle',
+                        style: TextStyle(
+                          color: _isCallActive ? Colors.white : Colors.grey.shade600,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -466,7 +814,7 @@ class _VideoCallPageState extends State<VideoCallPage> {
               margin: const EdgeInsets.all(8),
               decoration: BoxDecoration(
                 border: Border.all(
-                  color: _isCallActive ? Colors.green : Colors.grey,
+                  color: _isCallActive ? Colors.blue : Colors.grey,
                   width: 2,
                 ),
                 borderRadius: BorderRadius.circular(8),
@@ -497,124 +845,115 @@ class _VideoCallPageState extends State<VideoCallPage> {
                                     fontSize: 18,
                                   ),
                                 ),
+                                if (!_isCameraOn) ...[
+                                  const SizedBox(height: 10),
+                                  const Text(
+                                    'Turn camera ON to enable calls',
+                                    style: TextStyle(
+                                      color: Colors.grey,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                ],
                               ],
                             ),
                           ),
-                    Positioned(
-                      top: 8,
-                      left: 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.black54,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Text(
-                          '📹 Camera Video',
-                          style: TextStyle(color: Colors.white, fontSize: 12),
-                        ),
-                      ),
-                    ),
-                    // Local audio indicator
-                    Positioned(
-                      bottom: 8,
-                      right: 8,
-                      child: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: _isMuted ? Colors.red : Colors.green,
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          _isMuted ? Icons.mic_off : Icons.mic,
-                          color: Colors.white,
-                          size: 20,
+                    // Call status overlay
+                    if (_isCallActive)
+                      Positioned(
+                        top: 8,
+                        left: 8,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text(
+                            'LIVE',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                            ),
+                          ),
                         ),
                       ),
-                    ),
                   ],
                 ),
               ),
             ),
           ),
           
-          // Control buttons
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                FloatingActionButton(
-                  onPressed: _toggleMute,
-                  backgroundColor: _isMuted ? Colors.red : Colors.green,
-                  child: Icon(
-                    _isMuted ? Icons.mic_off : Icons.mic,
-                    color: Colors.white,
-                  ),
-                ),
-                FloatingActionButton(
-                  onPressed: _endCall,
-                  backgroundColor: Colors.red,
-                  child: const Icon(
-                    Icons.call_end,
-                    color: Colors.white,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          
-          // Debug logs
-          Expanded(
-            flex: 2,
-            child: Container(
-              margin: const EdgeInsets.all(8),
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.grey.shade300),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+          // Call controls (only show when in call)
+          if (_isCallActive)
+            Container(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        'Debug Log:',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      TextButton(
-                        onPressed: () {
-                          setState(() {
-                            _debugLogs.clear();
-                          });
-                        },
-                        child: const Text('Clear'),
-                      ),
-                    ],
+                  ElevatedButton.icon(
+                    onPressed: _toggleMute,
+                    icon: Icon(_isMuted ? Icons.mic_off : Icons.mic),
+                    label: Text(_isMuted ? 'Unmute' : 'Mute'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _isMuted ? Colors.red : Colors.grey,
+                      foregroundColor: Colors.white,
+                    ),
                   ),
-                  const SizedBox(height: 4),
-                  Expanded(
-                    child: ListView.builder(
-                      itemCount: _debugLogs.length,
-                      itemBuilder: (context, index) {
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 1),
-                          child: Text(
-                            _debugLogs[index],
-                            style: const TextStyle(
-                              fontSize: 10,
-                              fontFamily: 'monospace',
-                            ),
-                          ),
-                        );
-                      },
+                  ElevatedButton.icon(
+                    onPressed: _endCall,
+                    icon: const Icon(Icons.call_end),
+                    label: const Text('End Call'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      foregroundColor: Colors.white,
                     ),
                   ),
                 ],
               ),
+            ),
+          
+          // Debug logs
+          Container(
+            height: 150,
+            margin: const EdgeInsets.all(8),
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.grey.shade300),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Debug Logs:',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: _debugLogs.length,
+                    itemBuilder: (context, index) {
+                      final log = _debugLogs[_debugLogs.length - 1 - index];
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 1),
+                        child: Text(
+                          log,
+                          style: const TextStyle(
+                            fontSize: 10,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
             ),
           ),
         ],

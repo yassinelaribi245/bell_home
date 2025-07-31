@@ -133,6 +133,184 @@ public function getUserByCameraCode(Request $request)
      */
     public function destroy(string $id)
     {
-        //
+        $camera = Camera::find($id);
+        if ($camera) {
+            $camera->delete();
+            return response()->json(['message' => 'Camera deleted successfully']);
+        }
+        return response()->json(['error' => 'Camera not found'], 404);
+    }
+
+    // NEW: Update camera status when testing app connects/disconnects
+    public function updateCameraStatus(Request $request)
+    {
+        $request->validate([
+            'camera_code' => 'required|string',
+            'is_online' => 'required|boolean',
+            'is_active' => 'boolean',
+            'status' => 'string',
+            'timestamp' => 'string',
+        ]);
+
+        try {
+            $camera = Camera::where('cam_code', $request->input('camera_code'))->first();
+
+            if (!$camera) {
+                return response()->json(['error' => 'Camera not found'], 404);
+            }
+
+            $camera->update([
+                'is_online' => $request->input('is_online'),
+                'is_active' => $request->input('is_active', $camera->is_active),
+                'health_status' => $request->input('status', $camera->health_status),
+                'updated_at' => now(),
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Camera status updated successfully',
+                'camera' => $camera,
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Failed to update camera status',
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    // NEW: Handle camera connection event
+    public function cameraConnected(Request $request)
+    {
+        $request->validate([
+            'camera_code' => 'required|string',
+            'timestamp' => 'string',
+        ]);
+
+        try {
+            $camera = Camera::where('cam_code', $request->input('camera_code'))->first();
+
+            if (!$camera) {
+                return response()->json(['error' => 'Camera not found'], 404);
+            }
+
+            $camera->update([
+                'is_online' => true,
+                'health_status' => 'online',
+                'updated_at' => now(),
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Camera marked as connected',
+                'camera' => $camera,
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Failed to update camera connection status',
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    // NEW: Handle camera disconnection event
+    public function cameraDisconnected(Request $request)
+    {
+        $request->validate([
+            'camera_code' => 'required|string',
+            'timestamp' => 'string',
+        ]);
+
+        try {
+            $camera = Camera::where('cam_code', $request->input('camera_code'))->first();
+
+            if (!$camera) {
+                return response()->json(['error' => 'Camera not found'], 404);
+            }
+
+            $camera->update([
+                'is_online' => false,
+                'health_status' => 'offline',
+                'updated_at' => now(),
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Camera marked as disconnected',
+                'camera' => $camera,
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Failed to update camera disconnection status',
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    // NEW: Handle comprehensive camera status update
+    public function cameraStatusUpdate(Request $request)
+    {
+        $request->validate([
+            'camera_code' => 'required|string',
+            'is_online' => 'required|boolean',
+            'is_camera_on' => 'boolean',
+            'status' => 'string',
+            'timestamp' => 'string',
+        ]);
+
+        try {
+            \Log::info('Camera status update received', $request->all());
+            
+            $camera = Camera::where('cam_code', $request->input('camera_code'))->first();
+
+            if (!$camera) {
+                \Log::warning('Camera not found in database', ['camera_code' => $request->input('camera_code')]);
+                return response()->json(['error' => 'Camera not found'], 404);
+            }
+
+            $oldStatus = [
+                'is_online' => $camera->is_online,
+                'is_active' => $camera->is_active,
+                'health_status' => $camera->health_status,
+            ];
+
+            $camera->update([
+                'is_online' => $request->input('is_online'),
+                'is_active' => $request->input('is_camera_on', $camera->is_active),
+                'health_status' => $request->input('status', $camera->health_status),
+                'updated_at' => now(),
+            ]);
+
+            \Log::info('Camera status updated successfully', [
+                'camera_code' => $request->input('camera_code'),
+                'old_status' => $oldStatus,
+                'new_status' => [
+                    'is_online' => $camera->is_online,
+                    'is_active' => $camera->is_active,
+                    'health_status' => $camera->health_status,
+                ]
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Camera status updated successfully',
+                'camera' => $camera,
+            ]);
+
+        } catch (\Exception $e) {
+            \Log::error('Failed to update camera status', [
+                'camera_code' => $request->input('camera_code'),
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            return response()->json([
+                'error' => 'Failed to update camera status',
+                'message' => $e->getMessage()
+            ], 500);
+        }
     }
 }

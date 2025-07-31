@@ -88,6 +88,7 @@ class _EnhancedMainDashboardState extends State<EnhancedMainDashboard>
     _addDebugLog('🔗 Initializing persistent socket connection on app open...');
     _initializeSocket(); // Always connect to Node.js server when app opens
     _loadData(); // Automatically load cameras and homes on app open
+    _startPeriodicRefresh(); // Start periodic refresh
   }
 
   void _addDebugLog(String message) {
@@ -99,15 +100,65 @@ class _EnhancedMainDashboardState extends State<EnhancedMainDashboard>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     
-    if (state == AppLifecycleState.resumed) {
-      // App was resumed, check if there's a pending camera code
-      if (_pendingCameraCode != null) {
-        print('📱 App resumed with pending camera code: $_pendingCameraCode');
-        // Ensure socket is ready and handle the pending camera code
-        Future.delayed(const Duration(milliseconds: 500), () {
-          _ensureSocketConnectionAndJoinRoom(_pendingCameraCode!);
+    switch (state) {
+      case AppLifecycleState.resumed:
+        _addDebugLog('📱 App resumed - refreshing data');
+        _loadData(); // Refresh data when app comes back to foreground
+        break;
+      case AppLifecycleState.paused:
+        _addDebugLog('📱 App paused');
+        break;
+      case AppLifecycleState.detached:
+        _addDebugLog('📱 App detached');
+        break;
+      case AppLifecycleState.inactive:
+        _addDebugLog('📱 App inactive');
+        break;
+      case AppLifecycleState.hidden:
+        _addDebugLog('📱 App hidden');
+        break;
+    }
+  }
+
+  // NEW: Refresh camera data from database
+  Future<void> _refreshCameraData() async {
+    _addDebugLog('🔄 Refreshing camera data from database...');
+    
+    try {
+      setState(() {
+        _isLoading = true;
+      });
+
+      // Reload cameras from API
+      final cameraResponse = await _apiService.getCameras();
+      if (cameraResponse.success) {
+        setState(() {
+          _cameras = cameraResponse.data!;
+          _filteredCameras = _cameras;
         });
+        _addDebugLog('✅ Camera data refreshed from database');
+      } else {
+        _addDebugLog('❌ Failed to refresh camera data: ${cameraResponse.error}');
       }
+
+      // Reload homes from API
+      final homeResponse = await _apiService.getHomes();
+      if (homeResponse.success) {
+        setState(() {
+          _homes = homeResponse.data!;
+          _filteredHomes = _homes;
+        });
+        _addDebugLog('✅ Home data refreshed from database');
+      } else {
+        _addDebugLog('❌ Failed to refresh home data: ${homeResponse.error}');
+      }
+
+    } catch (e) {
+      _addDebugLog('❌ Error refreshing data: $e');
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
     }
   }
 
@@ -987,13 +1038,22 @@ class _EnhancedMainDashboardState extends State<EnhancedMainDashboard>
   /**
    * Refresh Data
    * 
-   * Manually refreshes all data from the API with
-   * visual feedback animation.
+   * Refreshes both cameras and homes data from the API
+   * and updates the UI with the latest information.
    */
   Future<void> _refreshData() async {
-    _refreshController.forward();
-    await _loadData();
-    _refreshController.reset();
+    _addDebugLog('🔄 Manual refresh triggered');
+    await _refreshCameraData();
+  }
+
+  // NEW: Periodic refresh to keep UI updated with database changes
+  void _startPeriodicRefresh() {
+    Timer.periodic(const Duration(seconds: 30), (timer) {
+      if (mounted && !_isLoading) {
+        _addDebugLog('🔄 Periodic refresh triggered');
+        _refreshCameraData();
+      }
+    });
   }
 
   /**
@@ -1253,102 +1313,55 @@ class _EnhancedMainDashboardState extends State<EnhancedMainDashboard>
                       ],
                     ),
                   ),
-                  // Status indicators
-                  if (camera.isRecording)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.red,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Text(
-                        'REC',
-                        style: TextStyle(color: Colors.white, fontSize: 10),
-                      ),
-                    ),
-                  if (camera.isStreaming)
-                    Container(
-                      margin: const EdgeInsets.only(left: 4),
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.blue,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Text(
-                        'LIVE',
-                        style: TextStyle(color: Colors.white, fontSize: 10),
-                      ),
-                    ),
                 ],
               ),
               const SizedBox(height: 8),
-              // Camera details
+              // Camera status - simplified to show only activity
               Row(
                 children: [
                   Text(
-                    'Status: ${camera.isOnline ? 'Online' : 'Offline'}'
-                    ': ${camera.healthStatus}', // Combined status and health
+                    'Status: ${camera.isActive ? 'Active' : 'Inactive'}',
                     style: TextStyle(
-                      color: camera.isOnline ? Colors.green : Colors.red,
+                      color: camera.isActive ? Colors.green : Colors.red,
                       fontWeight: FontWeight.w500,
+                      fontSize: 14,
                     ),
                   ),
-                  const SizedBox(width: 16),
+                ],
+              ),
+              const SizedBox(height: 8),
+              // Last updated indicator
+              Row(
+                children: [
+                  Icon(
+                    Icons.access_time,
+                    size: 12,
+                    color: Colors.grey.shade600,
+                  ),
+                  const SizedBox(width: 4),
                   Text(
-                    'Health: ${camera.healthStatus}',
-                    style: const TextStyle(color: Colors.grey),
+                    'Updated: ${_formatLastUpdated(camera.updatedAt)}',
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                  const Spacer(),
+                  // Camera activity indicator
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: camera.isActive ? Colors.green : Colors.red,
+                      shape: BoxShape.circle,
+                    ),
                   ),
                 ],
               ),
               const SizedBox(height: 12),
               Text(
-                'Home: ${camera.homeName}',
+                'Home: ${camera.homeId}',
                 style: const TextStyle(color: Colors.grey),
-              ),
-              const SizedBox(height: 12),
-              // Action buttons
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  // Stream button
-                  ElevatedButton.icon(
-                    onPressed: camera.isOnline
-                        ? () => _startCameraStream(camera)
-                        : null,
-                    icon: const Icon(Icons.play_arrow, size: 16),
-                    label: const Text('Stream'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blue,
-                      foregroundColor: Colors.white,
-                      minimumSize: const Size(80, 32),
-                    ),
-                  ),
-                  // Record button
-                  ElevatedButton.icon(
-                    onPressed: camera.isOnline
-                        ? () => _toggleCameraRecording(camera)
-                        : null,
-                    icon: Icon(
-                      camera.isRecording ? Icons.stop : Icons.fiber_manual_record,
-                      size: 16,
-                    ),
-                    label: Text(camera.isRecording ? 'Stop' : 'Record'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: camera.isRecording ? Colors.red : Colors.green,
-                      foregroundColor: Colors.white,
-                      minimumSize: const Size(80, 32),
-                    ),
-                  ),
-                  // Details button
-                  OutlinedButton.icon(
-                    onPressed: () => _navigateToCameraDetail(camera),
-                    icon: const Icon(Icons.info, size: 16),
-                    label: const Text('Details'),
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size(80, 32),
-                    ),
-                  ),
-                ],
               ),
             ],
           ),
@@ -1429,7 +1442,7 @@ class _EnhancedMainDashboardState extends State<EnhancedMainDashboard>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          home.name,
+                          home.name == 'Unnamed Home' ? 'Home ${home.id}' : home.name,
                           style: const TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
@@ -1489,7 +1502,7 @@ class _EnhancedMainDashboardState extends State<EnhancedMainDashboard>
                       if (mounted) {
                         setState(() {
                           _selectedIndex = 0; // Switch to cameras view
-                          _searchController.text = home.name; // Filter by home name
+                          _searchController.text = home.id.toString(); // Filter by home ID
                         });
                       }
                     },
@@ -1652,6 +1665,37 @@ class _EnhancedMainDashboardState extends State<EnhancedMainDashboard>
         child: const Icon(Icons.add, color: Colors.white),
       ),
     );
+  }
+
+  Color _getHealthColor(String healthStatus) {
+    switch (healthStatus) {
+      case 'healthy':
+        return Colors.green;
+      case 'warning':
+        return Colors.orange;
+      case 'critical':
+        return Colors.red;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  String _formatLastUpdated(DateTime? updatedAt) {
+    if (updatedAt == null) {
+      return 'Never';
+    }
+    final now = DateTime.now();
+    final difference = now.difference(updatedAt);
+
+    if (difference.inSeconds < 60) {
+      return '${difference.inSeconds}s ago';
+    } else if (difference.inMinutes < 60) {
+      return '${difference.inMinutes}m ago';
+    } else if (difference.inHours < 24) {
+      return '${difference.inHours}h ago';
+    } else {
+      return '${difference.inDays}d ago';
+    }
   }
 }
 

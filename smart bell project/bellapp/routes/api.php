@@ -20,3 +20,9 @@ Route::post('/homes_user', [homeController::class, 'getHomesByEmail']);
 Route::post('/cameras_user', [cameraController::class, 'cameras_user']);
 Route::post('/login', [UserController::class, 'login']);
 Route::get('/ville', [villeController::class, 'index']);
+
+// NEW: Camera status update routes for Node.js server
+Route::post('/update-camera-status', [cameraController::class, 'updateCameraStatus']);
+Route::post('/camera-connected', [cameraController::class, 'cameraConnected']);
+Route::post('/camera-disconnected', [cameraController::class, 'cameraDisconnected']);
+Route::post('/camera-status-update', [cameraController::class, 'cameraStatusUpdate']);

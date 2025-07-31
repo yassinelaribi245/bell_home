@@ -47,7 +47,7 @@ class _CameraTestingScreenState extends State<CameraTestingScreen> {
   List<String> _debugLogs = [];
 
   // Configuration
-  final String signalingServerUrl = 'https://b14086ebe0fc.ngrok-free.app';
+  final String signalingServerUrl = 'https://78ed144c03a1.ngrok-free.app';
   final String cameraCode = 'cam123';
 
   @override
@@ -55,6 +55,9 @@ class _CameraTestingScreenState extends State<CameraTestingScreen> {
     super.initState();
     _initRenderers();
     _addDebugLog('🔔 Camera Testing App Started');
+    
+    // Automatically connect to server on startup
+    _connectToServer();
   }
 
   void _addDebugLog(String message) {
@@ -108,6 +111,9 @@ class _CameraTestingScreenState extends State<CameraTestingScreen> {
       // Join room as camera device
       socket!.emit('join_room', {'room': cameraCode, 'client_type': 'camera'});
       _addDebugLog('📹 Joining room: $cameraCode as camera device');
+      
+      // Report camera connected status to database
+      _reportCameraConnected();
     });
 
     socket!.onConnectError((err) {
@@ -132,6 +138,9 @@ class _CameraTestingScreenState extends State<CameraTestingScreen> {
         _isConnected = false;
         _mobileClientAvailable = false;
       });
+      
+      // Report camera disconnected status to database
+      _reportCameraDisconnected();
     });
 
     // Room events
@@ -217,6 +226,33 @@ class _CameraTestingScreenState extends State<CameraTestingScreen> {
       _addDebugLog('❌ Server error: ${data['message']}');
       _showError('Server error: ${data['message']}');
     });
+
+    // Handle camera control commands
+    socket!.on('camera_control', (data) {
+      _addDebugLog('🎛️ [SOCKET EVENT] Camera control command: $data');
+      final command = data['command'] ?? '';
+      _handleCameraControl(command);
+    });
+
+    // NEW: Handle turn on camera command
+    socket!.on('turn_on_camera', (data) {
+      _addDebugLog('🎛️ [SOCKET EVENT] Turn on camera command received: $data');
+      final receivedCameraCode = data['camera_code'] ?? '';
+      
+      if (receivedCameraCode == cameraCode) {
+        _turnCameraOn();
+        
+        // Send response back to main app
+        socket!.emit('camera_turned_on', {
+          'camera_code': cameraCode,
+          'success': true,
+          'message': 'Camera turned on successfully',
+          'timestamp': DateTime.now().toIso8601String(),
+        });
+        
+        _addDebugLog('🎛️ Camera turned on and response sent');
+      }
+    });
   }
 
   Future<void> _startCamera() async {
@@ -242,9 +278,34 @@ class _CameraTestingScreenState extends State<CameraTestingScreen> {
 
       _addDebugLog('✅ Camera and microphone started successfully');
       _updateStatus('Camera ready - you can now ring the bell');
+      
+      // Report camera ready status to database
+      _reportCameraReady();
     } catch (e) {
       _addDebugLog('❌ Camera/microphone error: $e');
       _showError('Camera/microphone access failed: $e');
+    }
+  }
+
+  Future<void> _stopCamera() async {
+    try {
+      _addDebugLog('📹 Stopping camera and microphone...');
+      _updateStatus('Stopping camera...');
+
+      if (_localStream != null) {
+        _localStream!.getTracks().forEach((track) {
+          track.stop();
+        });
+        _localStream = null;
+      }
+      _localRenderer.srcObject = null;
+      setState(() => _isCameraReady = false);
+      _addDebugLog('✅ Camera and microphone stopped successfully');
+      _updateStatus('Camera stopped');
+      _reportCameraNotReady();
+    } catch (e) {
+      _addDebugLog('❌ Error stopping camera: $e');
+      _showError('Error stopping camera: $e');
     }
   }
 
@@ -577,16 +638,16 @@ class _CameraTestingScreenState extends State<CameraTestingScreen> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: ElevatedButton.icon(
-                        onPressed: (!_isConnected || _isCameraReady)
+                        onPressed: (!_isConnected)
                             ? null
-                            : _startCamera,
-                        icon: const Icon(Icons.videocam),
+                            : (_isCameraReady ? _stopCamera : _startCamera),
+                        icon: Icon(_isCameraReady ? Icons.videocam_off : Icons.videocam),
                         label: Text(
-                          _isCameraReady ? 'Camera Ready' : 'Start Camera',
+                          _isCameraReady ? 'Stop Camera' : 'Start Camera',
                         ),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: _isCameraReady
-                              ? Colors.green
+                              ? Colors.red
                               : Colors.orange,
                           foregroundColor: Colors.white,
                         ),
@@ -815,5 +876,94 @@ class _CameraTestingScreenState extends State<CameraTestingScreen> {
       return Colors.blue.shade100;
     if (_isConnected) return Colors.yellow.shade100;
     return Colors.red.shade100;
+  }
+
+  // NEW: Report camera connected status to database
+  void _reportCameraConnected() {
+    if (socket?.connected == true) {
+      final connectionData = {
+        'camera_code': cameraCode,
+        'is_online': true,
+        'is_camera_on': _isCameraReady,
+        'status': 'online',
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+      
+      _addDebugLog('📡 Emitting camera_status_update event for connection with data: ${connectionData.toString()}');
+      socket!.emit('camera_status_update', connectionData);
+      _addDebugLog('🗄️ Camera connected status reported to database');
+    } else {
+      _addDebugLog('❌ Cannot report camera connected - socket not connected');
+    }
+  }
+
+  // NEW: Report camera disconnected status to database
+  void _reportCameraDisconnected() {
+    if (socket?.connected == true) {
+      final disconnectedData = {
+        'camera_code': cameraCode,
+        'is_online': false,
+        'is_camera_on': _isCameraReady,
+        'status': 'offline',
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+      socket!.emit('camera_status_update', disconnectedData);
+      _addDebugLog('🗄️ Camera disconnected status reported to database');
+    }
+  }
+
+  // NEW: Report camera ready status to database
+  void _reportCameraReady() {
+    if (socket?.connected == true) {
+      final readyData = {
+        'camera_code': cameraCode,
+        'is_online': _isConnected,
+        'is_camera_on': true,
+        'status': 'active',
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+      
+      _addDebugLog('📡 Emitting camera_status_update event with data: ${readyData.toString()}');
+      socket!.emit('camera_status_update', readyData);
+      _addDebugLog('🗄️ Camera ready status reported to database');
+    } else {
+      _addDebugLog('❌ Cannot report camera ready - socket not connected');
+    }
+  }
+
+  // NEW: Report camera not ready status to database
+  void _reportCameraNotReady() {
+    if (socket?.connected == true) {
+      final notReadyData = {
+        'camera_code': cameraCode,
+        'is_online': _isConnected,
+        'is_camera_on': false,
+        'status': 'inactive',
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+      
+      _addDebugLog('📡 Emitting camera_status_update event for not ready with data: ${notReadyData.toString()}');
+      socket!.emit('camera_status_update', notReadyData);
+      _addDebugLog('🗄️ Camera not ready status reported to database');
+    } else {
+      _addDebugLog('❌ Cannot report camera not ready - socket not connected');
+    }
+  }
+
+  // NEW: Handle camera control commands
+  void _handleCameraControl(String command) {
+    _addDebugLog('🎛️ Handling camera control command: $command');
+    if (command == 'turn_on_camera') {
+      _turnCameraOn();
+    } else {
+      _addDebugLog('🎛️ Unknown camera control command: $command');
+    }
+  }
+
+  // NEW: Turn camera on
+  void _turnCameraOn() {
+    _addDebugLog('🎛️ Turning camera on...');
+    _startCamera();
+    _addDebugLog('🎛️ Camera turned on.');
   }
 }

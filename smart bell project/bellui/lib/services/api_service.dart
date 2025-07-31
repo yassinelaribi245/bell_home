@@ -23,9 +23,9 @@ import 'package:flutter/foundation.dart'; // For debugPrint
  */
 class ApiService {
   // API configuration
-  static const String _baseUrl = 'https://d155129e59d6.ngrok-free.app/api';
+  static const String _baseUrl = 'https://4474ba61c672.ngrok-free.app/api';
   /// Node.js server URL for Socket.IO (set your actual Node.js server URL here)
-  static const String nodeServerUrl = 'https://b14086ebe0fc.ngrok-free.app';
+  static const String nodeServerUrl = 'https://78ed144c03a1.ngrok-free.app';
   static const Duration _timeout = Duration(seconds: 30);
   static const int _maxRetries = 3;
   
@@ -274,6 +274,11 @@ class ApiService {
       return ApiResponse.error('Failed to load homes', response.statusCode);
     }
   }
+
+  // NEW: Alias for getUserHomes to fix build error
+  Future<ApiResponse<List<Home>>> getHomes() async {
+    return getUserHomes();
+  }
   
   /**
    * Get Home Details
@@ -477,41 +482,59 @@ class ApiService {
   /**
    * Get User Cameras
    * 
-   * Retrieves all cameras associated with the current user.
+   * Retrieves all cameras owned by the current user.
    */
   Future<ApiResponse<List<Camera>>> getUserCameras() async {
-    final box = Hive.box('authBox');
-    final user = box.get('user');
-    if (user == null || user['email'] == null) {
-      return ApiResponse.error('User not authenticated', 401);
-    }
-    final response = await _makeRequest('POST', '/cameras_user', body: {
-      'email': user['email'],
-    });
-    if (response.statusCode == 200) {
-      final Map<String, dynamic> data = json.decode(response.body);
-      final List<dynamic> camerasJson = data['cameras'] ?? [];
-      final cameras = camerasJson.map((json) => Camera.fromJson(json)).toList();
-      return ApiResponse.success(cameras, response.statusCode);
-    } else {
-      return ApiResponse.error('Failed to load cameras', response.statusCode);
+    try {
+      final response = await _makeRequest('POST', '/cameras_user', body: {
+        'email': _getCurrentUserEmail(),
+      });
+      
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['cameras'] != null) {
+          final cameras = (data['cameras'] as List)
+              .map((json) => Camera.fromJson(json))
+              .toList();
+          return ApiResponse.success(cameras, response.statusCode);
+        }
+        return ApiResponse.error('No cameras found', response.statusCode);
+      } else {
+        return ApiResponse.error('Failed to load cameras: ${response.statusCode}', response.statusCode);
+      }
+    } catch (e) {
+      return ApiResponse.error('Error loading cameras: $e', 500);
     }
   }
-  
+
+  // NEW: Alias for getCameras to fix build error
+  Future<ApiResponse<List<Camera>>> getCameras() async {
+    return getUserCameras();
+  }
+
   /**
    * Get Home Cameras
    * 
-   * Retrieves all cameras associated with a specific home.
+   * Retrieves all cameras for a specific home.
    */
   Future<ApiResponse<List<Camera>>> getHomeCameras(int homeId) async {
-    final response = await _makeRequest('GET', '/homes/$homeId/cameras');
-    
-    if (response.statusCode == 200) {
-      final List<dynamic> data = json.decode(response.body);
-      final cameras = data.map((json) => Camera.fromJson(json)).toList();
-      return ApiResponse.success(cameras, response.statusCode);
-    } else {
-      return ApiResponse.error('Failed to load cameras', response.statusCode);
+    try {
+      final response = await _makeRequest('GET', '/homes/$homeId/cameras');
+      
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['cameras'] != null) {
+          final cameras = (data['cameras'] as List)
+              .map((json) => Camera.fromJson(json))
+              .toList();
+          return ApiResponse.success(cameras, response.statusCode);
+        }
+        return ApiResponse.error('No cameras found for this home', response.statusCode);
+      } else {
+        return ApiResponse.error('Failed to load home cameras: ${response.statusCode}', response.statusCode);
+      }
+    } catch (e) {
+      return ApiResponse.error('Error loading home cameras: $e', 500);
     }
   }
   
@@ -867,6 +890,12 @@ class ApiService {
   }
 
   static void init() {}
+
+  String _getCurrentUserEmail() {
+    final box = Hive.box('authBox');
+    final user = box.get('user');
+    return user?['email'] ?? '';
+  }
 }
 
 /**

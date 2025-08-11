@@ -1,0 +1,518 @@
+==============================
+SMART BELL SYSTEM: CODE REFERENCE & ARCHITECTURE
+==============================
+
+This document explains the core logic, function names, file locations, parameters, return values, and RTC (WebRTC) call flow for the three main components:
+- server (Node.js signaling server)
+- bellui (Flutter main/mobile app)
+- testcall (Flutter camera/testing app)
+
+It also includes code samples and explanations for complex or package-related functions.
+
+----------------------------------------
+1. SERVER (Node.js Signaling Server)
+----------------------------------------
+File: server/index.js
+
+### Key Functions & Events
+
+- **_updateCameraStatusInDatabase(cameraCode, isOnline, status, isCameraOn = null)**
+  - Params:
+    - cameraCode (string): Camera identifier
+    - isOnline (bool): Online status
+    - status (string): Status string (e.g., 'online', 'offline')
+    - isCameraOn (bool|null): Whether camera is on (optional)
+  - Returns: Promise<void>
+  - Description: Updates camera status in the Laravel API database. Uses axios to POST data.
+  - Example:
+    ```js
+    await _updateCameraStatusInDatabase('cam123', true, 'online', true);
+    ```
+
+- **Socket.IO Events**
+  - **join_room**
+    - Params: { room: string, client_type: 'camera'|'mobile' }
+    - Description: Joins a room for signaling. Tracks camera/mobile clients.
+  - **camera_control**
+    - Params: { camera_code: string, command: string, parameters?: object }
+    - Description: Relays camera control commands (turn_on, turn_off, toggle) from mobile to camera.
+    - Example:
+      ```js
+      socket.to(camera_code).emit('camera_control', { command, parameters, timestamp: ... });
+      ```
+  - **get_camera_status**
+    - Params: { camera_code: string }
+    - Description: Requests camera to report its status.
+  - **offer/answer/ice_candidate**
+    - Params: { room: string, sdp/candidate: ... }
+    - Description: WebRTC signaling relay between camera and mobile.
+  - **call_ended, call_rejected, camera_status_changed, camera_control_response**
+    - Various events for call and camera state changes.
+
+----------------------------------------
+2. BELLUI (Flutter Main/Mobile App)
+----------------------------------------
+
+### File: bellui/lib/pages/video_call_page.dart
+
+#### Key Classes & Functions
+
+- **VideoCallPage (StatefulWidget)**
+  - Params:
+    - cameraCode (String): Camera identifier
+    - roomId (String): Room for signaling
+    - camera (Camera): Camera model object
+    - existingSocket (io.Socket?): Optional pre-connected socket
+
+- **_VideoCallPageState**
+  - **_initRenderers()**
+    - Params: none
+    - Returns: Future<void>
+    - Description: Initializes local and remote RTCVideoRenderer objects for video display.
+    - Example:
+      ```dart
+      await _localRenderer.initialize();
+      await _remoteRenderer.initialize();
+      ```
+  - **_setupPeerConnection()**
+    - Params: none
+    - Returns: Future<void>
+    - Description: Creates and configures the RTCPeerConnection for WebRTC.
+    - Example:
+      ```dart
+      _peerConnection = await createPeerConnection(_peerConfig);
+      ```
+  - **_handleOffer(data)**
+    - Params: data (dynamic): Contains SDP offer from camera
+    - Returns: Future<void>
+    - Description: Sets remote description, adds local tracks, creates and sends answer.
+    - Example:
+      ```dart
+      final offer = RTCSessionDescription(data['sdp']['sdp'], data['sdp']['type']);
+      await _peerConnection!.setRemoteDescription(offer);
+      await _createAndSendAnswer();
+      ```
+  - **_createAndSendAnswer()**
+    - Params: none
+    - Returns: Future<void>
+    - Description: Creates SDP answer and emits it to the server.
+  - **_handleIceCandidate(data)**
+    - Params: data (dynamic): ICE candidate info
+    - Returns: Future<void>
+    - Description: Adds ICE candidate to peer connection.
+  - **_endCall()**
+    - Params: none
+    - Returns: void
+    - Description: Cleans up peer connection and streams.
+
+#### WebRTC Call Flow (Mobile Side)
+1. Joins room via socket.io.
+2. Receives 'offer' from camera (testcall), sets as remote description.
+3. Starts local audio, adds tracks to peer connection.
+4. Creates and sends 'answer' back to camera.
+5. Handles incoming ICE candidates.
+6. Streams remote video/audio to UI.
+
+#### Code Sample: Handling an Offer
+```dart
+Future<void> _handleOffer(dynamic data) async {
+  final offer = RTCSessionDescription(data['sdp']['sdp'], data['sdp']['type']);
+  await _peerConnection!.setRemoteDescription(offer);
+  await _startLocalAudio();
+  await _createAndSendAnswer();
+}
+```
+
+#### ICE Server Config Example
+```dart
+static final Map<String, dynamic> _peerConfig = {
+  'iceServers': [
+    {'urls': 'stun:stun.l.google.com:19302'},
+    {'urls': 'stun:stun1.l.google.com:19302'},
+    {'urls': 'stun:stun2.l.google.com:19302'},
+    {
+      'urls': 'turn:openrelay.metered.ca:80',
+      'username': 'openrelayproject',
+      'credential': 'openrelayproject',
+    },
+  ],
+  'iceCandidatePoolSize': 10,
+  'bundlePolicy': 'max-bundle',
+  'rtcpMuxPolicy': 'require',
+};
+```
+
+----------------------------------------
+3. TESTCALL (Flutter Camera/Testing App)
+----------------------------------------
+
+### File: testcall/lib/video_call_page.dart
+
+#### Key Classes & Functions
+
+- **VideoCallPage (StatefulWidget)**
+  - Params:
+    - cameraCode (String): Camera identifier
+
+- **_VideoCallPageState**
+  - **_initRenderers()**
+    - Params: none
+    - Returns: Future<void>
+    - Description: Initializes RTCVideoRenderer objects.
+  - **_connectToServer()**
+    - Params: none
+    - Returns: void
+    - Description: Connects to signaling server via socket.io.
+  - **_setupPeerConnection()**
+    - Params: none
+    - Returns: Future<void>
+    - Description: Sets up RTCPeerConnection for WebRTC.
+  - **_startLocalStream()**
+    - Params: none
+    - Returns: Future<void>
+    - Description: Captures video/audio from device and adds to peer connection.
+    - Example:
+      ```dart
+      _localStream = await navigator.mediaDevices.getUserMedia({
+        'audio': true,
+        'video': {
+          'facingMode': 'user',
+          'width': 1280,
+          'height': 720,
+          'frameRate': 30,
+        },
+      });
+      ```
+  - **_handleCameraControl(String command)**
+    - Params: command (String): Control command (e.g., 'turn_on', 'turn_off', 'toggle')
+    - Returns: void
+    - Description: Turns camera on/off or toggles state. Handles string normalization and logs command details.
+    - Example:
+      ```dart
+      void _handleCameraControl(String command) {
+        final normalized = command.trim().toLowerCase();
+        if (normalized.contains('off')) _turnCameraOff();
+        else if (normalized.contains('on')) _turnCameraOn();
+        else if (normalized.contains('toggle')) _isCameraOn ? _turnCameraOff() : _turnCameraOn();
+      }
+      ```
+
+#### WebRTC Call Flow (Camera Side)
+1. Joins room as camera via socket.io.
+2. Waits for 'answer' from mobile, sets as remote description.
+3. Captures local video/audio, adds tracks to peer connection.
+4. Creates and sends 'offer' to mobile.
+5. Handles incoming ICE candidates.
+6. Streams local video/audio to UI and remote peer.
+
+#### Code Sample: Creating and Sending an Offer
+```dart
+Future<void> _startVideoCall() async {
+  final offer = await _peerConnection!.createOffer({
+    'offerToReceiveAudio': true,
+    'offerToReceiveVideo': false,
+  });
+  await _peerConnection!.setLocalDescription(offer);
+  socket!.emit('offer', {'room': widget.cameraCode, 'sdp': offer.toMap()});
+}
+```
+
+----------------------------------------
+4. PACKAGE/COMPLEX SYNTAX EXPLANATIONS
+----------------------------------------
+
+- **flutter_webrtc**
+  - Provides WebRTC support in Flutter. Key classes: RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, RTCVideoRenderer.
+  - Example: Creating a peer connection
+    ```dart
+    final pc = await createPeerConnection(config);
+    ```
+
+- **socket_io_client**
+  - Used for real-time signaling between apps and server.
+  - Example: Connecting and emitting events
+    ```dart
+    final socket = io.io(serverUrl, <String, dynamic>{
+      'transports': ['websocket'],
+      'autoConnect': false,
+    });
+    socket.connect();
+    socket.emit('join_room', {'room': 'cam123', 'client_type': 'camera'});
+    ```
+
+- **axios (Node.js)**
+  - Used in server for HTTP requests to Laravel API.
+  - Example:
+    ```js
+    const response = await axios.post('https://api.url', data);
+    ```
+
+----------------------------------------
+5. SUMMARY OF RTC CALL FLOW
+----------------------------------------
+
+1. **Room Join:** Both camera (testcall) and mobile (bellui) join the same room on the signaling server.
+2. **Offer/Answer:**
+   - Camera creates an offer, sends to mobile.
+   - Mobile sets offer as remote description, creates answer, sends back.
+3. **ICE Candidates:** Both sides exchange ICE candidates for NAT traversal.
+4. **Media Streams:**
+   - Camera captures local video/audio, streams to peer connection.
+   - Mobile receives remote stream and displays it.
+5. **Camera Control:**
+   - Mobile sends camera control commands via socket.io.
+   - Camera receives and executes commands, updates state.
+
+----------------------------------------
+6. TROUBLESHOOTING TIPS
+----------------------------------------
+- Always use a TURN server for NAT traversal.
+- Ensure all socket events are handled on both client and server.
+- Use debug logs to trace RTC and signaling events.
+- For Hero/layout errors in Flutter, always set unique heroTag for each FloatingActionButton.
+
+----------------------------------------
+END OF DOCUMENT
+----------------------------------------
+
+==============================
+7. FUNCTION USAGE ORDER & REPLICATION GUIDE
+==============================
+
+This section explains, step by step, how the main functions are used together in the RTC call and camera control flows. It is designed so you can replicate or modify the logic for your own use case.
+
+---
+A. RTC CALL FLOW (ORDERED STEPS)
+---
+
+**1. Both Devices Join the Same Room**
+- Both the camera (testcall) and the mobile app (bellui) connect to the signaling server using socket.io and emit a `join_room` event with the same room name (usually the camera code).
+- Example:
+  ```dart
+  // Flutter (bellui or testcall)
+  socket.emit('join_room', {'room': cameraCode, 'client_type': 'camera' or 'mobile'});
+  ```
+
+**2. Camera (testcall) Prepares to Send an Offer**
+- The camera sets up its local media (video/audio) and creates a WebRTC peer connection.
+- It then creates an SDP offer and emits it to the room via the server.
+- Example:
+  ```dart
+  final offer = await _peerConnection.createOffer({...});
+  await _peerConnection.setLocalDescription(offer);
+  socket.emit('offer', {'room': cameraCode, 'sdp': offer.toMap()});
+  ```
+
+**3. Mobile (bellui) Receives the Offer**
+- The mobile app listens for the 'offer' event, sets the remote description, starts its own local media (usually audio), and creates an SDP answer.
+- It emits the answer back to the room.
+- Example:
+  ```dart
+  socket.on('offer', (data) async {
+    await _peerConnection.setRemoteDescription(...);
+    final answer = await _peerConnection.createAnswer();
+    await _peerConnection.setLocalDescription(answer);
+    socket.emit('answer', {'room': cameraCode, 'sdp': answer.toMap()});
+  });
+  ```
+
+**4. Camera Receives the Answer**
+- The camera listens for the 'answer' event and sets it as the remote description.
+- Example:
+  ```dart
+  socket.on('answer', (data) async {
+    await _peerConnection.setRemoteDescription(...);
+  });
+  ```
+
+**5. ICE Candidate Exchange**
+- Both sides listen for 'ice_candidate' events and add candidates to their peer connection.
+- When a new ICE candidate is found locally, it is emitted to the other peer via the server.
+- Example:
+  ```dart
+  // When a new candidate is found
+  _peerConnection.onIceCandidate = (candidate) {
+    socket.emit('ice_candidate', {...});
+  };
+  // When receiving a candidate
+  socket.on('ice_candidate', (data) async {
+    await _peerConnection.addCandidate(...);
+  });
+  ```
+
+**6. Media Streams**
+- Once the connection is established, the camera streams its video/audio to the mobile app, which displays it using RTCVideoRenderer.
+
+---
+B. CAMERA CONTROL FLOW (ORDERED STEPS)
+---
+
+**1. Mobile App Sends a Camera Control Command**
+- The mobile app emits a 'camera_control' event to the server, specifying the camera code and command (e.g., 'turn_off').
+- Example:
+  ```dart
+  socket.emit('camera_control', {'camera_code': cameraCode, 'command': 'turn_off'});
+  ```
+
+**2. Server Relays the Command**
+- The server receives the command and relays it to the camera's room.
+- Example (Node.js):
+  ```js
+  socket.to(camera_code).emit('camera_control', { command, ... });
+  ```
+
+**3. Camera Receives and Executes the Command**
+- The camera app listens for 'camera_control', normalizes the command string, and calls the appropriate function (e.g., _turnCameraOff()).
+- Example:
+  ```dart
+  socket.on('camera_control', (data) {
+    _handleCameraControl(data['command']);
+  });
+  ```
+
+---
+C. HOW TO REPLICATE OR MODIFY
+---
+- To add new camera commands, add new cases in the `_handleCameraControl` function in the camera app and ensure the mobile app emits the correct command string.
+- To change the call flow (e.g., add authentication), modify the join_room logic and add checks on the server and clients.
+- To support multiple cameras, use unique room names for each camera and have the mobile app join the desired room.
+
+==============================
+8. ICE SERVERS EXPLAINED
+==============================
+
+**What is an ICE Server?**
+- ICE (Interactive Connectivity Establishment) servers help WebRTC clients find the best way to connect to each other, even if they are behind NATs or firewalls.
+- There are two types:
+  - **STUN server:** Helps discover your public IP address. Used for most direct connections.
+  - **TURN server:** Relays media if a direct connection is not possible (e.g., strict NAT/firewall). Required for reliable connections across networks.
+
+**How is it used in code?**
+- You provide a list of ICE servers when creating the peer connection:
+  ```dart
+  final config = {
+    'iceServers': [
+      {'urls': 'stun:stun.l.google.com:19302'},
+      {'urls': 'turn:openrelay.metered.ca:80', 'username': 'openrelayproject', 'credential': 'openrelayproject'},
+    ]
+  };
+  final pc = await createPeerConnection(config);
+  ```
+- The browser/Flutter app will try each server in order to establish a connection.
+
+**Analogy:**
+- Think of STUN as asking, "What is my address?" and TURN as, "If I can't reach you directly, can I send my mail to a post office and have them deliver it?"
+
+==============================
+9. SOCKET.IO & ROOMS EXPLAINED
+==============================
+
+**What is Socket.IO?**
+- Socket.IO is a library for real-time, bidirectional communication between clients (apps) and a server.
+- It uses WebSockets under the hood for fast, event-based messaging.
+
+**What is a Room?**
+- A room is a virtual channel on the server. Clients can join a room and send/receive messages only with others in the same room.
+- Used to isolate signaling for each camera/call.
+
+**How does it work in this code?**
+- Both the camera and mobile app join the same room (named after the camera code).
+- The server relays messages (offer, answer, ice_candidate, camera_control) only to clients in that room.
+- Example (Node.js):
+  ```js
+  socket.join(room);
+  socket.to(room).emit('offer', {...});
+  ```
+- Example (Flutter):
+  ```dart
+  socket.emit('join_room', {'room': cameraCode, 'client_type': 'camera'});
+  ```
+
+**Analogy:**
+- Imagine a building with many rooms. People in room A can only talk to others in room A. If you want to talk to someone in room B, you have to join room B.
+
+==============================
+10. SUMMARY OF HOW TO EXTEND OR MODIFY
+==============================
+- To add new features, follow the function order above and add new events or handlers as needed.
+- Always use unique room names for each camera/session.
+- Use ICE servers for reliable connections, and always include a TURN server for production.
+- Use debug logs to trace the flow and diagnose issues.
+
+==============================
+END OF ADDITIONAL EXPLANATION
+==============================
+
+==============================
+11. HOW TO REVERSE THE OFFER/ANSWER FLOW (MAIN APP SENDS OFFER)
+==============================
+
+By default, the camera/testing app (testcall) sends the offer and the main app (bellui) sends the answer. To reverse this (so the main app sends the offer and the testing app sends the answer), follow these steps:
+
+---
+A. OVERVIEW
+---
+- The main app (bellui) will initiate the call by creating and sending the offer.
+- The testing app (testcall) will wait for the offer, set it as remote description, and reply with an answer.
+- The server logic does not need to change, as it simply relays 'offer', 'answer', and 'ice_candidate' events between clients in the same room.
+
+---
+B. STEP-BY-STEP CHANGES
+---
+
+**1. In the Main App (bellui):**
+- After joining the room and confirming the camera is available, create the peer connection and local media stream.
+- Create an offer and emit it to the server.
+- Listen for the 'answer' event and set it as the remote description.
+
+*Example code:*
+```dart
+// After joining room and initializing peer connection:
+final offer = await _peerConnection.createOffer({'offerToReceiveVideo': true, 'offerToReceiveAudio': true});
+await _peerConnection.setLocalDescription(offer);
+socket.emit('offer', {'room': cameraCode, 'sdp': offer.toMap()});
+
+// Listen for answer:
+socket.on('answer', (data) async {
+  final answer = RTCSessionDescription(data['sdp']['sdp'], data['sdp']['type']);
+  await _peerConnection.setRemoteDescription(answer);
+});
+```
+
+**2. In the Testing App (testcall):**
+- Wait for the 'offer' event from the server.
+- When received, set it as the remote description, create an answer, set it as local description, and emit it back.
+
+*Example code:*
+```dart
+socket.on('offer', (data) async {
+  final offer = RTCSessionDescription(data['sdp']['sdp'], data['sdp']['type']);
+  await _peerConnection.setRemoteDescription(offer);
+  // Create local media stream if not already
+  final answer = await _peerConnection.createAnswer({'offerToReceiveVideo': false, 'offerToReceiveAudio': true});
+  await _peerConnection.setLocalDescription(answer);
+  socket.emit('answer', {'room': cameraCode, 'sdp': answer.toMap()});
+});
+```
+
+**3. ICE Candidate Handling (Both Apps):**
+- No change needed. Both apps should continue to emit and listen for 'ice_candidate' events as before.
+
+---
+C. NOTES & TIPS
+---
+- Make sure only one side (main app) creates and sends the offer. The other side (testing app) should only respond with an answer.
+- You may want to add a button or trigger in the main app to start the call (i.e., to create and send the offer).
+- The server does not care which side sends the offer/answer; it just relays messages.
+- This flow is sometimes called "caller/callee" or "polite/impolite peer" in WebRTC documentation.
+
+---
+D. SUMMARY OF CHANGES
+---
+- Main app (bellui): Initiates call, creates and sends offer, waits for answer.
+- Testing app (testcall): Waits for offer, creates and sends answer.
+- ICE candidate exchange remains unchanged.
+
+==============================
+END OF OFFER/ANSWER REVERSAL GUIDE
+==============================

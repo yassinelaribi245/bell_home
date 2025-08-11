@@ -14,17 +14,17 @@ class VideoCallPage extends StatefulWidget {
 class _VideoCallPageState extends State<VideoCallPage> {
   final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
   final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
-  
+
   io.Socket? socket;
   RTCPeerConnection? _peerConnection;
   MediaStream? _localStream;
-  
+
   String _connectionStatus = 'Connecting...';
   String _iceConnectionState = 'New';
   bool _isCallActive = false;
   bool _isMuted = false;
   List<String> _debugLogs = [];
-  
+
   // NEW: Camera control states
   bool _isCameraOn = false;
   bool _isCameraOnline = false;
@@ -65,19 +65,15 @@ class _VideoCallPageState extends State<VideoCallPage> {
   void _connectToServer() async {
     try {
       _addDebugLog('🔗 Connecting to signaling server...');
-      
-      socket = io.io(
-        signalingServerUrl,
-        <String, dynamic>{
-          'transports': ['websocket'],
-          'autoConnect': false,
-          'timeout': 20000,
-        },
-      );
+
+      socket = io.io(signalingServerUrl, <String, dynamic>{
+        'transports': ['websocket'],
+        'autoConnect': false,
+        'timeout': 20000,
+      });
 
       _setupSocketEventHandlers();
       socket!.connect();
-
     } catch (e) {
       _addDebugLog('❌ Connection error: $e');
       _updateStatus('Connection Error');
@@ -89,23 +85,23 @@ class _VideoCallPageState extends State<VideoCallPage> {
     socket!.onConnect((_) async {
       _addDebugLog('✅ Connected to signaling server');
       _updateStatus('Connected - setting up call...');
-      
+
       // Set camera online but not active yet
       setState(() {
         _isCameraOnline = true;
         _cameraStatus = 'Online'; // Online but not active until turned on
       });
-      
+
       // Join room as camera device
       socket!.emit('join_room', {
         'room': widget.cameraCode,
-        'client_type': 'camera'
+        'client_type': 'camera',
       });
       _addDebugLog('📹 Joining room: ${widget.cameraCode} as camera device');
-      
+
       // Report camera status to update database
       _reportCameraStatus();
-      
+
       // Also report camera as connected to database
       _reportCameraConnected();
     });
@@ -120,7 +116,7 @@ class _VideoCallPageState extends State<VideoCallPage> {
       _addDebugLog('❌ Disconnected from server');
       _updateStatus('Disconnected');
       _setCameraOffline();
-      
+
       // Report camera disconnected to database
       _reportCameraDisconnected();
     });
@@ -135,7 +131,7 @@ class _VideoCallPageState extends State<VideoCallPage> {
     socket!.on('get_camera_status', (data) {
       _addDebugLog('📊 Camera status requested');
       _reportCameraStatus();
-      
+
       // NEW: Send direct response to main app
       socket!.emit('camera_status_response', {
         'camera_code': widget.cameraCode,
@@ -151,17 +147,21 @@ class _VideoCallPageState extends State<VideoCallPage> {
     socket!.on('camera_control', (data) {
       _addDebugLog('🎛️ [SOCKET EVENT] Camera control command: $data');
       final command = data['command'] ?? '';
+      _addDebugLog('🎛️ Raw command from data: "$command"');
+      _addDebugLog('🎛️ Command type: ${command.runtimeType}');
+      _addDebugLog('🎛️ Command length: ${command.length}');
+      _addDebugLog('🎛️ Command bytes: ${command.codeUnits}');
       _handleCameraControl(command);
     });
 
     // NEW: Handle turn on camera command
-    socket!.on('turn_on_camera', (data) {
+    socket!.on('camera_turned_on', (data) {
       _addDebugLog('🎛️ [SOCKET EVENT] Turn on camera command received: $data');
       final cameraCode = data['camera_code'] ?? '';
-      
+
       if (cameraCode == widget.cameraCode) {
         _turnCameraOn();
-        
+
         // Send response back to main app
         socket!.emit('camera_turned_on', {
           'camera_code': widget.cameraCode,
@@ -169,7 +169,7 @@ class _VideoCallPageState extends State<VideoCallPage> {
           'message': 'Camera turned on successfully',
           'timestamp': DateTime.now().toIso8601String(),
         });
-        
+
         _addDebugLog('🎛️ Camera turned on and response sent');
       }
     });
@@ -199,20 +199,27 @@ class _VideoCallPageState extends State<VideoCallPage> {
   Future<void> _setupPeerConnection() async {
     try {
       _addDebugLog('🔗 Setting up peer connection...');
-      
+
       final Map<String, dynamic> config = {
         'iceServers': [
           {'urls': 'stun:stun.l.google.com:19302'},
           {'urls': 'stun:stun1.l.google.com:19302'},
+          {'urls': 'stun:stun2.l.google.com:19302'},
+          {
+            'urls': 'turn:openrelay.metered.ca:80',
+            'username': 'openrelayproject',
+            'credential': 'openrelayproject',
+          },
         ],
         'iceCandidatePoolSize': 10,
+        'bundlePolicy': 'max-bundle',
+        'rtcpMuxPolicy': 'require',
       };
 
       _peerConnection = await createPeerConnection(config);
       _addDebugLog('✅ Peer connection created');
 
       _setupPeerConnectionHandlers();
-      
     } catch (e) {
       _addDebugLog('❌ Peer connection setup error: $e');
       rethrow;
@@ -224,21 +231,25 @@ class _VideoCallPageState extends State<VideoCallPage> {
     _peerConnection!.onTrack = (event) {
       _addDebugLog('📡 Received remote track from camera');
       _addDebugLog('🎬 Track kind: ${event.track.kind}, ID: ${event.track.id}');
-      
+
       if (event.streams.isNotEmpty) {
         final remoteStream = event.streams[0];
-        _addDebugLog('📹 Remote stream has ${remoteStream.getTracks().length} tracks');
-        
+        _addDebugLog(
+          '📹 Remote stream has ${remoteStream.getTracks().length} tracks',
+        );
+
         // Debug track information
         remoteStream.getTracks().forEach((track) {
-          _addDebugLog('🎬 Remote ${track.kind} track - enabled: ${track.enabled}, ID: ${track.id}');
+          _addDebugLog(
+            '🎬 Remote ${track.kind} track - enabled: ${track.enabled}, ID: ${track.id}',
+          );
         });
 
         setState(() {
           _remoteRenderer.srcObject = remoteStream;
           _isCallActive = true;
         });
-        
+
         _addDebugLog('✅ Remote stream set to renderer');
         _updateStatus('Video call active!');
       } else {
@@ -265,7 +276,7 @@ class _VideoCallPageState extends State<VideoCallPage> {
     _peerConnection!.onIceConnectionState = (state) {
       _addDebugLog('🔗 ICE connection state: $state');
       setState(() => _iceConnectionState = state.toString());
-      
+
       switch (state) {
         case RTCIceConnectionState.RTCIceConnectionStateConnected:
           _updateStatus('Connected!');
@@ -302,38 +313,61 @@ class _VideoCallPageState extends State<VideoCallPage> {
     };
   }
 
-  Future<void> _startLocalAudio() async {
+  Future<void> _startLocalStream() async {
     try {
-      _addDebugLog('🎤 Starting local audio...');
-      
+      _addDebugLog('📹 Starting local video and audio stream...');
+
       final Map<String, dynamic> mediaConstraints = {
         'audio': {
           'echoCancellation': true,
           'noiseSuppression': true,
           'autoGainControl': true,
         },
-        'video': false, // Mobile only sends audio
+        'video': {
+          'width': {'ideal': 1280},
+          'height': {'ideal': 720},
+          'frameRate': {'ideal': 30},
+        },
       };
-      
-      _localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
-      
+
+      _localStream = await navigator.mediaDevices.getUserMedia(
+        mediaConstraints,
+      );
+
       if (_localStream != null) {
         _localRenderer.srcObject = _localStream;
-        
-        _addDebugLog('✅ Local audio started successfully');
-        _addDebugLog('📊 Local stream tracks: ${_localStream!.getTracks().length}');
-        
+
+        _addDebugLog('✅ Local stream started successfully');
+        _addDebugLog(
+          '📊 Local stream tracks: ${_localStream!.getTracks().length}',
+        );
+
         // Log track details
         _localStream!.getTracks().forEach((track) {
-          _addDebugLog('🎬 Local ${track.kind} track: ${track.id} - enabled: ${track.enabled}');
+          _addDebugLog(
+            '🎬 Local ${track.kind} track: ${track.id} - enabled: ${track.enabled}',
+          );
         });
-        
       } else {
-        throw Exception('Failed to get audio stream');
+        throw Exception('Failed to get media stream');
       }
-      
     } catch (e) {
-      _addDebugLog('❌ Audio error: $e');
+      _addDebugLog('❌ Media stream error: $e');
+      // Try with simpler constraints
+      try {
+        _addDebugLog('🔄 Retrying with simpler constraints...');
+        final simpleConstraints = {'audio': true, 'video': true};
+
+        _localStream = await navigator.mediaDevices.getUserMedia(
+          simpleConstraints,
+        );
+        if (_localStream != null) {
+          _localRenderer.srcObject = _localStream;
+          _addDebugLog('✅ Local stream started with simple constraints');
+        }
+      } catch (retryError) {
+        _addDebugLog('❌ Retry failed: $retryError');
+      }
     }
   }
 
@@ -341,24 +375,28 @@ class _VideoCallPageState extends State<VideoCallPage> {
     try {
       _addDebugLog('📞 Processing offer from mobile client...');
       _addDebugLog('📄 Offer SDP type: ${data['sdp']['type']}');
-      
-      final offer = RTCSessionDescription(data['sdp']['sdp'], data['sdp']['type']);
+
+      final offer = RTCSessionDescription(
+        data['sdp']['sdp'],
+        data['sdp']['type'],
+      );
       await _peerConnection!.setRemoteDescription(offer);
       _addDebugLog('✅ Remote description (offer) set');
-      
+
       // Add local stream tracks to peer connection BEFORE creating answer
       if (_localStream != null) {
         _localStream!.getTracks().forEach((track) {
           _peerConnection!.addTrack(track, _localStream!);
-          _addDebugLog('➕ Added ${track.kind} track to peer connection: ${track.id}');
+          _addDebugLog(
+            '➕ Added ${track.kind} track to peer connection: ${track.id}',
+          );
         });
       } else {
         _addDebugLog('⚠️ No local stream available to add to peer connection');
       }
-      
+
       // Create and send answer
       await _createAndSendAnswer();
-      
     } catch (e) {
       _addDebugLog('❌ Error in handleOffer: $e');
     }
@@ -367,28 +405,29 @@ class _VideoCallPageState extends State<VideoCallPage> {
   Future<void> _createAndSendAnswer() async {
     try {
       _addDebugLog('📞 Creating answer...');
-      
+
       // Create answer - mobile sends audio, expects video+audio
       final Map<String, dynamic> answerOptions = {
-        'offerToReceiveAudio': true,  // We want to receive audio from camera
-        'offerToReceiveVideo': true,  // We want to receive video from camera
+        'offerToReceiveAudio': true, // We want to receive audio from camera
+        'offerToReceiveVideo': true, // We want to receive video from camera
       };
-      
+
       final answer = await _peerConnection!.createAnswer(answerOptions);
-      
+
       // Log SDP details for debugging
       _addDebugLog('📄 Answer SDP type: ${answer.type}');
-      _addDebugLog('📄 Answer SDP (first 100 chars): ${answer.sdp?.substring(0, 100)}...');
-      
+      _addDebugLog(
+        '📄 Answer SDP (first 100 chars): ${answer.sdp?.substring(0, 100)}...',
+      );
+
       await _peerConnection!.setLocalDescription(answer);
       _addDebugLog('✅ Local description (answer) set');
-      
+
       socket!.emit('answer', {
         'room': widget.cameraCode,
-        'sdp': answer.toMap()
+        'sdp': answer.toMap(),
       });
       _addDebugLog('📤 Answer sent to mobile client');
-      
     } catch (e) {
       _addDebugLog('❌ Error creating/sending answer: $e');
     }
@@ -400,7 +439,7 @@ class _VideoCallPageState extends State<VideoCallPage> {
         _addDebugLog('⚠️ Received ICE candidate but no peer connection');
         return;
       }
-      
+
       final candidate = RTCIceCandidate(
         data['candidate'],
         data['sdpMid'],
@@ -410,6 +449,22 @@ class _VideoCallPageState extends State<VideoCallPage> {
       _addDebugLog('✅ ICE candidate added');
     } catch (e) {
       _addDebugLog('❌ Error adding ICE candidate: $e');
+    }
+  }
+
+  Future<void> _handleAnswer(dynamic data) async {
+    try {
+      _addDebugLog('📞 Processing answer from mobile client...');
+      _addDebugLog('📄 Answer SDP type: ${data['sdp']['type']}');
+
+      final answer = RTCSessionDescription(
+        data['sdp']['sdp'],
+        data['sdp']['type'],
+      );
+      await _peerConnection!.setRemoteDescription(answer);
+      _addDebugLog('✅ Remote description (answer) set');
+    } catch (e) {
+      _addDebugLog('❌ Error in handleAnswer: $e');
     }
   }
 
@@ -429,26 +484,26 @@ class _VideoCallPageState extends State<VideoCallPage> {
 
   void _endCall() {
     _addDebugLog('📞 Ending call...');
-    
+
     if (socket != null) {
       socket!.emit('end_call', {'room': widget.cameraCode});
     }
-    
+
     setState(() {
       _isCallActive = false;
       _remoteRenderer.srcObject = null;
     });
-    
+
     if (_peerConnection != null) {
       _peerConnection!.close();
       _peerConnection = null;
     }
-    
+
     if (_localStream != null) {
       _localStream!.dispose();
       _localStream = null;
     }
-    
+
     // Navigate back to home screen
     Navigator.of(context).pop();
   }
@@ -469,7 +524,7 @@ class _VideoCallPageState extends State<VideoCallPage> {
         'status': _cameraStatus,
         'timestamp': DateTime.now().toIso8601String(),
       };
-      
+
       socket!.emit('camera_status_update', status);
       _addDebugLog('📊 Camera status reported: $_cameraStatus');
     }
@@ -485,7 +540,7 @@ class _VideoCallPageState extends State<VideoCallPage> {
         'status': 'online',
         'timestamp': DateTime.now().toIso8601String(),
       };
-      
+
       socket!.emit('camera_status_update', connectionData);
       _addDebugLog('🗄️ Camera connected status reported to database');
     }
@@ -562,44 +617,58 @@ class _VideoCallPageState extends State<VideoCallPage> {
       'camera_code': widget.cameraCode,
       'timestamp': DateTime.now().toIso8601String(),
     });
-    
+
     // Setup peer connection for the call
     _setupPeerConnection();
   }
 
   // NEW: Handle camera control commands
   void _handleCameraControl(String command) {
-    switch (command) {
-      case 'turn_on':
-        _turnCameraOn();
-        break;
-      case 'turn_off':
+    _addDebugLog(
+      '🎛️ Handling camera control command: "$command" (length:  [36m${command.length} [0m)',
+    );
+    _addDebugLog('🎛️ Command bytes: ${command.codeUnits}');
+    _addDebugLog('🎛️ Command runtime type: ${command.runtimeType}');
+
+    final normalizedCommand = command.trim().toLowerCase();
+    _addDebugLog('🎛️ Normalized command: "$normalizedCommand"');
+
+    if (normalizedCommand.contains('off')) {
+      _addDebugLog('🎛️ Detected "off" in command, turning camera off.');
+      _turnCameraOff();
+    } else if (normalizedCommand.contains('on')) {
+      _addDebugLog('🎛️ Detected "on" in command, turning camera on.');
+      _turnCameraOn();
+    } else if (normalizedCommand.contains('toggle')) {
+      _addDebugLog('🎛️ Detected "toggle" in command, toggling camera.');
+      if (_isCameraOn) {
         _turnCameraOff();
-        break;
-      case 'toggle':
-        if (_isCameraOn) {
-          _turnCameraOff();
-        } else {
-          _turnCameraOn();
-        }
-        break;
-      default:
-        _addDebugLog('❌ Unknown camera control command: $command');
+      } else {
+        _turnCameraOn();
+      }
+    } else {
+      _addDebugLog('❌ Unknown camera control command: "$command"');
+      _addDebugLog('❌ Normalized command: "$normalizedCommand"');
+      _addDebugLog('❌ Available commands: turn_on, turn_off, toggle');
     }
   }
 
   // NEW: Turn camera on
-  void _turnCameraOn() {
+  void _turnCameraOn() async {
     setState(() {
       _isCameraOn = true;
       _cameraStatus = 'Active';
     });
     _addDebugLog('✅ Camera turned ON - Status: Active');
+
+    // Start local stream when camera is turned on
+    await _startLocalStream();
+
     _reportCameraStatus();
-    
+
     // Also report camera as active to database
     _reportCameraActive();
-    
+
     // NEW: Send control response to main app
     socket!.emit('camera_control_response', {
       'camera_code': widget.cameraCode,
@@ -617,11 +686,20 @@ class _VideoCallPageState extends State<VideoCallPage> {
       _cameraStatus = 'Inactive';
     });
     _addDebugLog('❌ Camera turned OFF - Status: Inactive');
+
+    // Dispose local stream when camera is turned off
+    if (_localStream != null) {
+      _localStream!.dispose();
+      _localStream = null;
+      _localRenderer.srcObject = null;
+      _addDebugLog('📹 Local stream disposed');
+    }
+
     _reportCameraStatus();
-    
+
     // Also report camera as inactive to database
     _reportCameraInactive();
-    
+
     // NEW: Send control response to main app
     socket!.emit('camera_control_response', {
       'camera_code': widget.cameraCode,
@@ -630,7 +708,7 @@ class _VideoCallPageState extends State<VideoCallPage> {
       'message': 'Camera turned off successfully',
       'timestamp': DateTime.now().toIso8601String(),
     });
-    
+
     // End any active call
     if (_isCallActive) {
       _endCall();
@@ -643,7 +721,7 @@ class _VideoCallPageState extends State<VideoCallPage> {
       _addDebugLog('❌ Cannot ring bell - camera is off');
       return;
     }
-    
+
     _addDebugLog('🔔 Ringing bell...');
     socket!.emit('ring_bell', {
       'camera_code': widget.cameraCode,
@@ -677,10 +755,7 @@ class _VideoCallPageState extends State<VideoCallPage> {
             ),
             child: Text(
               _isCameraOn ? 'ON' : 'OFF',
-              style: const TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 12,
-              ),
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
             ),
           ),
           const SizedBox(width: 16),
@@ -703,11 +778,16 @@ class _VideoCallPageState extends State<VideoCallPage> {
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 16,
-                        color: _isCameraOn ? Colors.green.shade800 : Colors.red.shade800,
+                        color: _isCameraOn
+                            ? Colors.green.shade800
+                            : Colors.red.shade800,
                       ),
                     ),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: _isCameraOnline ? Colors.green : Colors.red,
                         borderRadius: BorderRadius.circular(12),
@@ -734,13 +814,15 @@ class _VideoCallPageState extends State<VideoCallPage> {
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
-                    color: _isCameraOn ? Colors.green.shade700 : Colors.red.shade700,
+                    color: _isCameraOn
+                        ? Colors.green.shade700
+                        : Colors.red.shade700,
                   ),
                 ),
               ],
             ),
           ),
-          
+
           // Camera controls
           Container(
             padding: const EdgeInsets.all(16),
@@ -761,10 +843,13 @@ class _VideoCallPageState extends State<VideoCallPage> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _isCameraOn ? Colors.red : Colors.green,
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
                   ),
                 ),
-                
+
                 // Ring Bell Button
                 ElevatedButton.icon(
                   onPressed: _isCameraOn ? _ringBell : null,
@@ -773,13 +858,19 @@ class _VideoCallPageState extends State<VideoCallPage> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _isCameraOn ? Colors.orange : Colors.grey,
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
                   ),
                 ),
-                
+
                 // Call Status
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                   decoration: BoxDecoration(
                     color: _isCallActive ? Colors.blue : Colors.grey.shade300,
                     borderRadius: BorderRadius.circular(8),
@@ -789,14 +880,18 @@ class _VideoCallPageState extends State<VideoCallPage> {
                     children: [
                       Icon(
                         _isCallActive ? Icons.call : Icons.call_end,
-                        color: _isCallActive ? Colors.white : Colors.grey.shade600,
+                        color: _isCallActive
+                            ? Colors.white
+                            : Colors.grey.shade600,
                         size: 16,
                       ),
                       const SizedBox(width: 4),
                       Text(
                         _isCallActive ? 'In Call' : 'Idle',
                         style: TextStyle(
-                          color: _isCallActive ? Colors.white : Colors.grey.shade600,
+                          color: _isCallActive
+                              ? Colors.white
+                              : Colors.grey.shade600,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -806,7 +901,7 @@ class _VideoCallPageState extends State<VideoCallPage> {
               ],
             ),
           ),
-          
+
           // Video display
           Expanded(
             flex: 3,
@@ -824,21 +919,31 @@ class _VideoCallPageState extends State<VideoCallPage> {
                 child: Stack(
                   children: [
                     _remoteRenderer.srcObject != null
-                        ? RTCVideoView(_remoteRenderer, objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)
+                        ? SizedBox.expand(
+                            child: RTCVideoView(
+                              _remoteRenderer,
+                              objectFit: RTCVideoViewObjectFit
+                                  .RTCVideoViewObjectFitCover,
+                            ),
+                          )
                         : Container(
                             color: Colors.black,
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
                                 Icon(
-                                  _isCallActive ? Icons.videocam : Icons.videocam_off,
+                                  _isCallActive
+                                      ? Icons.videocam
+                                      : Icons.videocam_off,
                                   size: 80,
-                                  color: _isCallActive ? Colors.white : Colors.grey,
+                                  color: _isCallActive
+                                      ? Colors.white
+                                      : Colors.grey,
                                 ),
                                 const SizedBox(height: 20),
                                 Text(
-                                  _isCallActive 
-                                      ? 'Waiting for video...' 
+                                  _isCallActive
+                                      ? 'Waiting for video...'
                                       : 'No video connection',
                                   style: const TextStyle(
                                     color: Colors.white,
@@ -864,7 +969,10 @@ class _VideoCallPageState extends State<VideoCallPage> {
                         top: 8,
                         left: 8,
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
                           decoration: BoxDecoration(
                             color: Colors.black54,
                             borderRadius: BorderRadius.circular(4),
@@ -884,7 +992,7 @@ class _VideoCallPageState extends State<VideoCallPage> {
               ),
             ),
           ),
-          
+
           // Call controls (only show when in call)
           if (_isCallActive)
             Container(
@@ -913,7 +1021,7 @@ class _VideoCallPageState extends State<VideoCallPage> {
                 ],
               ),
             ),
-          
+
           // Debug logs
           Container(
             height: 150,
@@ -929,10 +1037,7 @@ class _VideoCallPageState extends State<VideoCallPage> {
               children: [
                 const Text(
                   'Debug Logs:',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14,
-                  ),
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                 ),
                 const SizedBox(height: 4),
                 Expanded(

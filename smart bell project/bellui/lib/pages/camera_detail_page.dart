@@ -9,51 +9,92 @@ import 'dart:convert'; // Added for json.decode
 // Import the video call page
 import 'package:bellui/pages/video_call_page.dart'; // Corrected import path
 
-/// Camera Detail Page
-/// 
-/// This page provides a comprehensive view of a single camera with:
-/// - Real-time status monitoring and health information
-/// - Streaming controls (start/stop video stream)
-/// - Recording controls (start/stop recording)
-/// - Camera settings and configuration options
-/// - Location and technical information
-/// - Activity history and logs
-/// - Motion detection settings
-/// - Storage and notification preferences
-/// 
-/// The page updates in real-time using Socket.IO connections and
-/// provides full control over camera operations.
 class CameraDetailPage extends StatefulWidget {
   final Camera camera;
 
-  const CameraDetailPage({
-    super.key,
-    required this.camera,
-  });
+  const CameraDetailPage({super.key, required this.camera});
 
   @override
   State<CameraDetailPage> createState() => _CameraDetailPageState();
 }
 
 class _CameraDetailPageState extends State<CameraDetailPage>
-    with TickerProviderStateMixin {
-  
+        // Show incoming call dialog and trigger signaling for testcall-initiated calls
+        with
+        TickerProviderStateMixin {
+  // Show incoming call dialog and trigger signaling for testcall-initiated calls
+  void _showIncomingCallDialog(Map<String, dynamic> data) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Incoming Call'),
+          content: Text('Camera is calling you. Accept the call?'),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                socket?.emit('camera_response', {
+                  'room': _camera.camCode,
+                  'response': 'refused',
+                  'timestamp': DateTime.now().toIso8601String(),
+                });
+                _addDebugLog('Call rejected by user.');
+                UIUtils.showSnackBar(
+                  context,
+                  'Call rejected.',
+                  backgroundColor: Colors.red,
+                );
+              },
+              child: const Text('Reject'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                socket?.emit('camera_response', {
+                  'room': _camera.camCode,
+                  'response': 'accepted',
+                  'timestamp': DateTime.now().toIso8601String(),
+                });
+                _addDebugLog('Call accepted by user. Signaling triggered.');
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => VideoCallPage(
+                      roomId: _camera.camCode,
+                      cameraCode: _camera.camCode,
+                      camera: _camera,
+                      existingSocket: socket,
+                      isMainAppCall: false,
+                    ),
+                  ),
+                );
+              },
+              child: const Text('Accept'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   // Camera state management
   late Camera _camera;
   bool _isLoading = false;
-  
+
   // Real-time communication
   io.Socket? socket;
   bool isSocketConnected = false;
   Timer? _statusTimer;
-  
+
   // Animation controllers
   late AnimationController _pulseController;
   late AnimationController _rotationController;
-  
+
   // Activity and logs
   final List<String> _debugLogs = [];
-  
+
   // API service instance
   final ApiService _apiService = ApiService();
 
@@ -68,15 +109,13 @@ class _CameraDetailPageState extends State<CameraDetailPage>
     _camera = widget.camera;
     _initializeAnimations();
     _initializeSocket();
-    
+
     // Initialize camera status from camera object
     _isCameraOn = _camera.isActive;
     _isCameraOnline = _camera.isOnline;
     _cameraStatus = _camera.healthStatus;
   }
 
-  /// Initialize Animation Controllers
-  /// 
   /// Sets up animations for visual feedback during camera operations
   /// like recording indicators and status updates.
   void _initializeAnimations() {
@@ -84,12 +123,12 @@ class _CameraDetailPageState extends State<CameraDetailPage>
       duration: const Duration(milliseconds: 1000),
       vsync: this,
     );
-    
+
     _rotationController = AnimationController(
       duration: const Duration(milliseconds: 2000),
       vsync: this,
     );
-    
+
     // Start pulse animation if camera is recording
     if (_camera.isRecording) {
       _pulseController.repeat(reverse: true);
@@ -97,7 +136,7 @@ class _CameraDetailPageState extends State<CameraDetailPage>
   }
 
   /// Initialize Socket Connection
-  /// 
+  ///
   /// Establishes real-time connection for camera status updates
   /// and live event notifications.
   void _initializeSocket() {
@@ -108,16 +147,20 @@ class _CameraDetailPageState extends State<CameraDetailPage>
         'timeout': 20000,
       });
 
+      // Register all socket event listeners after socket is initialized
+      socket!.on('incoming_call', (data) {
+        _addDebugLog('🔔 [SOCKET EVENT] incoming_call: $data');
+        _showIncomingCallDialog(data is Map<String, dynamic> ? data : {});
+      });
+
       socket!.onConnect((_) {
         setState(() {
           isSocketConnected = true;
         });
-        
+
         // Join camera-specific room for updates
-        socket!.emit('join_camera_room', {
-          'camera_code': _camera.camCode,
-        });
-        
+        socket!.emit('join_camera_room', {'camera_code': _camera.camCode});
+
         _addDebugLog('Connected to camera ${_camera.camCode}');
       });
 
@@ -156,22 +199,28 @@ class _CameraDetailPageState extends State<CameraDetailPage>
           _isCameraOn = data['is_camera_on'] ?? false;
           _cameraStatus = data['status'] ?? 'Offline';
         });
-        
+
         // Update camera object
         _camera = _camera.copyWith(
           isOnline: _isCameraOnline,
           isActive: _isCameraOn,
           healthStatus: _cameraStatus,
         );
-        
-        _addDebugLog('📊 Camera status updated: $_cameraStatus (Online: $_isCameraOnline, Camera: $_isCameraOn)');
+
+        _addDebugLog(
+          '📊 Camera status updated: $_cameraStatus (Online: $_isCameraOnline, Camera: $_isCameraOn)',
+        );
       });
 
       // NEW: Handle call initiation responses
       socket!.on('call_accepted', (data) {
         _addDebugLog('✅ [SOCKET EVENT] Call accepted by camera: $data');
-        UIUtils.showSnackBar(context, 'Call accepted by camera!', backgroundColor: Colors.green);
-        
+        UIUtils.showSnackBar(
+          context,
+          'Call accepted by camera!',
+          backgroundColor: Colors.green,
+        );
+
         // Navigate to video call page
         _navigateToVideoCall();
       });
@@ -179,7 +228,11 @@ class _CameraDetailPageState extends State<CameraDetailPage>
       socket!.on('call_rejected', (data) {
         _addDebugLog('❌ [SOCKET EVENT] Call rejected by camera: $data');
         final reason = data['reason'] ?? 'Unknown reason';
-        UIUtils.showSnackBar(context, 'Call rejected: $reason', backgroundColor: Colors.red);
+        UIUtils.showSnackBar(
+          context,
+          'Call rejected: $reason',
+          backgroundColor: Colors.red,
+        );
       });
 
       socket!.on('call_initiation_failed', (data) {
@@ -194,10 +247,14 @@ class _CameraDetailPageState extends State<CameraDetailPage>
         final success = data['success'] ?? false;
         final message = data['message'] ?? '';
         final command = data['command'] ?? '';
-        
+
         if (success) {
-          UIUtils.showSnackBar(context, 'Camera control: $message', backgroundColor: Colors.green);
-          
+          UIUtils.showSnackBar(
+            context,
+            'Camera control: $message',
+            backgroundColor: Colors.green,
+          );
+
           // Update local state based on command
           if (command == 'turn_on') {
             setState(() {
@@ -216,7 +273,11 @@ class _CameraDetailPageState extends State<CameraDetailPage>
             _addDebugLog('🎛️ Camera toggled locally: $_isCameraOn');
           }
         } else {
-          UIUtils.showSnackBar(context, 'Camera control failed: $message', backgroundColor: Colors.red);
+          UIUtils.showSnackBar(
+            context,
+            'Camera control failed: $message',
+            backgroundColor: Colors.red,
+          );
         }
       });
 
@@ -224,16 +285,22 @@ class _CameraDetailPageState extends State<CameraDetailPage>
       socket!.on('camera_status_response', (data) {
         _addDebugLog('📊 [SOCKET EVENT] Camera status response: $data');
         final cameraCode = data['camera_code'] ?? '';
-        
+
         if (cameraCode == _camera.camCode) {
           setState(() {
             _isCameraOnline = data['is_online'] ?? false;
             _isCameraOn = data['is_camera_on'] ?? false;
             _cameraStatus = data['status'] ?? 'Offline';
           });
-          
-          _addDebugLog('📊 Camera status updated from response: $_cameraStatus (Online: $_isCameraOnline, Camera: $_isCameraOn)');
-          UIUtils.showSnackBar(context, 'Camera status refreshed', backgroundColor: Colors.blue);
+
+          _addDebugLog(
+            '📊 Camera status updated from response: $_cameraStatus (Online: $_isCameraOnline, Camera: $_isCameraOn)',
+          );
+          UIUtils.showSnackBar(
+            context,
+            'Camera status refreshed',
+            backgroundColor: Colors.blue,
+          );
         }
       });
 
@@ -242,20 +309,57 @@ class _CameraDetailPageState extends State<CameraDetailPage>
         _addDebugLog('🎛️ [SOCKET EVENT] Camera turned on response: $data');
         final cameraCode = data['camera_code'] ?? '';
         final success = data['success'] ?? false;
-        
+
         if (cameraCode == _camera.camCode) {
           if (success) {
             setState(() {
               _isCameraOn = true;
             });
             _addDebugLog('🎛️ Camera turned on successfully');
-            UIUtils.showSnackBar(context, 'Camera turned on successfully', backgroundColor: Colors.green);
+            UIUtils.showSnackBar(
+              context,
+              'Camera turned on successfully',
+              backgroundColor: Colors.green,
+            );
           } else {
             setState(() {
               _isCameraOn = false;
             });
             _addDebugLog('❌ Failed to turn on camera');
-            UIUtils.showSnackBar(context, 'Failed to turn on camera', backgroundColor: Colors.red);
+            UIUtils.showSnackBar(
+              context,
+              'Failed to turn on camera',
+              backgroundColor: Colors.red,
+            );
+          }
+        }
+      });
+      socket!.on('camera_turned_off', (data) {
+        _addDebugLog('🎛️ [SOCKET EVENT] Camera turned off response: $data');
+        final cameraCode = data['camera_code'] ?? '';
+        final success = data['success'] ?? false;
+
+        if (cameraCode == _camera.camCode) {
+          if (success) {
+            setState(() {
+              _isCameraOn = false;
+            });
+            _addDebugLog('🎛️ Camera turned off successfully');
+            UIUtils.showSnackBar(
+              context,
+              'Camera turned off successfully',
+              backgroundColor: Colors.green,
+            );
+          } else {
+            setState(() {
+              _isCameraOn = false;
+            });
+            _addDebugLog('❌ Failed to turn off camera');
+            UIUtils.showSnackBar(
+              context,
+              'Failed to turn off camera',
+              backgroundColor: Colors.red,
+            );
           }
         }
       });
@@ -270,14 +374,16 @@ class _CameraDetailPageState extends State<CameraDetailPage>
       socket!.connect();
     } catch (e) {
       _addDebugLog('Socket initialization error: $e');
-      UIUtils.showSnackBar(context, 'Socket connection error: $e', backgroundColor: Colors.red);
+      UIUtils.showSnackBar(
+        context,
+        'Socket connection error: $e',
+        backgroundColor: Colors.red,
+      );
     }
   }
 
-
-
   /// Handle Status Update
-  /// 
+  ///
   /// Processes real-time status updates received via Socket.IO
   /// and updates the UI accordingly.
   void _handleStatusUpdate(dynamic data) {
@@ -289,9 +395,11 @@ class _CameraDetailPageState extends State<CameraDetailPage>
           isStreaming: data['is_streaming'] ?? _camera.isStreaming,
         );
       });
-      
-      _addDebugLog('Status updated: Online=${_camera.isOnline}, Recording=${_camera.isRecording}');
-      
+
+      _addDebugLog(
+        'Status updated: Online=${_camera.isOnline}, Recording=${_camera.isRecording}',
+      );
+
       // Update animations based on new status
       if (_camera.isRecording && !_pulseController.isAnimating) {
         _pulseController.repeat(reverse: true);
@@ -303,7 +411,7 @@ class _CameraDetailPageState extends State<CameraDetailPage>
   }
 
   /// Handle Motion Detection
-  /// 
+  ///
   /// Processes motion detection events and updates the activity log.
   void _handleMotionDetection(dynamic data) {
     if (data['camera_code'] == _camera.camCode) {
@@ -313,16 +421,16 @@ class _CameraDetailPageState extends State<CameraDetailPage>
         description: 'Motion detected',
         timestamp: DateTime.now(),
       );
-      
+
       setState(() {
         // _activities.insert(0, activity); // Removed
         // if (_activities.length > 50) { // Removed
         //   _activities.removeLast(); // Removed
         // } // Removed
       });
-      
+
       _addDebugLog('Motion detected at ${DateTime.now()}');
-      
+
       // Show notification if enabled
       // if (_notificationsEnabled) { // Removed
       //   UIUtils.showSnackBar(context, 'Motion detected!', backgroundColor: Colors.orange); // Removed
@@ -331,49 +439,61 @@ class _CameraDetailPageState extends State<CameraDetailPage>
   }
 
   /// Handle Recording Started
-  /// 
+  ///
   /// Processes recording start events and updates the UI.
   void _handleRecordingStarted(dynamic data) {
     if (data['camera_code'] == _camera.camCode) {
       setState(() {
         _camera = _camera.copyWith(isRecording: true);
       });
-      
+
       _pulseController.repeat(reverse: true);
       _addDebugLog('Recording started');
-      UIUtils.showSnackBar(context, 'Recording started', backgroundColor: Colors.green);
+      UIUtils.showSnackBar(
+        context,
+        'Recording started',
+        backgroundColor: Colors.green,
+      );
     }
   }
 
   /// Handle Recording Stopped
-  /// 
+  ///
   /// Processes recording stop events and updates the UI.
   void _handleRecordingStopped(dynamic data) {
     if (data['camera_code'] == _camera.camCode) {
       setState(() {
         _camera = _camera.copyWith(isRecording: false);
       });
-      
+
       _pulseController.stop();
       _pulseController.reset();
       _addDebugLog('Recording stopped');
-      UIUtils.showSnackBar(context, 'Recording stopped', backgroundColor: Colors.red);
+      UIUtils.showSnackBar(
+        context,
+        'Recording stopped',
+        backgroundColor: Colors.red,
+      );
     }
   }
 
   /// Handle Camera Error
-  /// 
+  ///
   /// Processes camera error events and displays appropriate messages.
   void _handleCameraError(dynamic data) {
     if (data['camera_code'] == _camera.camCode) {
       final error = data['error'] ?? 'Unknown error';
       _addDebugLog('Camera error: $error');
-      UIUtils.showSnackBar(context, 'Camera error: $error', backgroundColor: Colors.red);
+      UIUtils.showSnackBar(
+        context,
+        'Camera error: $error',
+        backgroundColor: Colors.red,
+      );
     }
   }
 
   /// Add Debug Log
-  /// 
+  ///
   /// Adds a timestamped debug message to the debug log list.
   void _addDebugLog(String message) {
     final timestamp = DateTime.now().toString().substring(11, 19);
@@ -387,16 +507,23 @@ class _CameraDetailPageState extends State<CameraDetailPage>
   }
 
   /// Start Camera Stream
-  /// 
+  ///
   /// Initiates a video stream from the camera and navigates
   /// to the video call page.
   void _startCameraStream() {
     if (!mounted) return;
-    if (!_camera.isOnline) {
-      UIUtils.showSnackBar(context, 'Camera is offline', backgroundColor: Colors.red);
+    if (_camera.isOnline) {
+      UIUtils.showSnackBar(
+        context,
+        'Camera is offline',
+        backgroundColor: Colors.red,
+      );
       return;
     }
-    
+
+    // Emit start_call1 to trigger testcall to start the call
+    socket?.emit('start_call1', {'room': _camera.camCode});
+
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -412,14 +539,11 @@ class _CameraDetailPageState extends State<CameraDetailPage>
     });
   }
 
-
-
-
-
   // Navigate to video call page
-  void _navigateToVideoCall() {
+  void _navigateToVideoCall({bool isMainAppCall = true}) {
+    socket!.emit('start_call1', {'room': _camera.camCode});
     if (!mounted) return;
-    
+
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -428,16 +552,13 @@ class _CameraDetailPageState extends State<CameraDetailPage>
           cameraCode: _camera.camCode,
           camera: _camera,
           existingSocket: socket,
+          isMainAppCall: isMainAppCall,
         ),
       ),
     );
   }
 
-
-
-
-
-    // NEW: Helper methods for call button states
+  // NEW: Helper methods for call button states
   bool _getCallButtonEnabled() {
     return _isCameraOn; // Only check if camera is active
   }
@@ -446,7 +567,7 @@ class _CameraDetailPageState extends State<CameraDetailPage>
     if (!_isCameraOn) {
       return 'Camera Inactive';
     } else {
-      return 'Call Testing App';
+      return 'start call';
     }
   }
 
@@ -467,15 +588,54 @@ class _CameraDetailPageState extends State<CameraDetailPage>
       _isCameraOn = true;
     });
 
-    socket!.emit('turn_on_camera', {
+    socket!.emit('camera_turned_on', {
       'camera_code': _camera.camCode,
+      'success': true,
+      'message': 'Camera turned on successfully',
+      'timestamp': DateTime.now().toIso8601String(),
     });
     _addDebugLog('Attempting to turn camera on...');
   }
 
+  // NEW: Method to turn camera off
+  void _turnCameraOff() {
+    if (!mounted) return;
+    if (!_isCameraOn) return; // Prevent double clicks
+
+    setState(() {
+      _isCameraOn = false;
+    });
+
+    socket!.emit('camera_turned_off', {
+      'camera_code': _camera.camCode,
+      'success': true,
+      'message': 'Camera turned off successfully',
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+    _addDebugLog('Attempting to turn camera off...');
+  }
+
+  // NEW: Method to get camera status
+  void _getCameraStatus() {
+    if (!mounted) return;
+
+    socket!.emit('get_camera_status', {'camera_code': _camera.camCode});
+    _addDebugLog('Requesting camera status...');
+  }
+
+  void _toggleCamera() {
+    if (!mounted) return;
+    if (_isCameraOn) {
+      _turnCameraOff();
+    } else {
+      _turnCameraOn();
+    }
+  }
 
   @override
   void dispose() {
+    socket!.emit('leave', {'room': _camera.camCode});
+    debugPrint('📡 Left room ${_camera.camCode}');
     _pulseController.dispose();
     _rotationController.dispose();
     _statusTimer?.cancel();
@@ -485,14 +645,11 @@ class _CameraDetailPageState extends State<CameraDetailPage>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: _buildAppBar(),
-      body: _buildBody(),
-    );
+    return Scaffold(appBar: _buildAppBar(), body: _buildBody());
   }
 
   /// Build App Bar
-  /// 
+  ///
   /// Creates the app bar with camera name, status indicators, and menu options.
   PreferredSizeWidget _buildAppBar() {
     return AppBar(
@@ -563,13 +720,11 @@ class _CameraDetailPageState extends State<CameraDetailPage>
   }
 
   /// Build Body
-  /// 
+  ///
   /// Creates the main content area with camera information and controls.
   Widget _buildBody() {
     if (_isLoading && _camera.id == null) {
-      return const Center(
-        child: CircularProgressIndicator(),
-      );
+      return const Center(child: CircularProgressIndicator());
     }
 
     return SingleChildScrollView(
@@ -588,13 +743,10 @@ class _CameraDetailPageState extends State<CameraDetailPage>
   }
 
   /// Build Status Card
-  /// 
-
-
-
+  ///
 
   /// Build Controls Card
-  /// 
+  ///
   /// Creates a card with camera control buttons for streaming and recording.
   Widget _buildControlsCard() {
     return Card(
@@ -614,13 +766,15 @@ class _CameraDetailPageState extends State<CameraDetailPage>
               ],
             ),
             const SizedBox(height: 16),
-            
+
             // NEW: Simplified camera activity status
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: _isCameraOn ? Colors.green.shade100 : Colors.red.shade100,
+                color: _isCameraOn
+                    ? Colors.green.shade100
+                    : Colors.red.shade100,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
                   color: _isCameraOn ? Colors.green : Colors.red,
@@ -634,7 +788,9 @@ class _CameraDetailPageState extends State<CameraDetailPage>
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.bold,
-                      color: _isCameraOn ? Colors.green.shade800 : Colors.red.shade800,
+                      color: _isCameraOn
+                          ? Colors.green.shade800
+                          : Colors.red.shade800,
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -643,20 +799,24 @@ class _CameraDetailPageState extends State<CameraDetailPage>
                     style: TextStyle(
                       fontSize: 24,
                       fontWeight: FontWeight.bold,
-                      color: _isCameraOn ? Colors.green.shade800 : Colors.red.shade800,
+                      color: _isCameraOn
+                          ? Colors.green.shade800
+                          : Colors.red.shade800,
                     ),
                   ),
                 ],
               ),
             ),
-            
+
             const SizedBox(height: 16),
-            
+
             // Call button - navigate to video call
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: _getCallButtonEnabled() ? _navigateToVideoCall : null,
+                onPressed: _getCallButtonEnabled()
+                    ? _navigateToVideoCall
+                    : null,
                 icon: const Icon(Icons.call),
                 label: Text(_getCallButtonText()),
                 style: ElevatedButton.styleFrom(
@@ -666,27 +826,44 @@ class _CameraDetailPageState extends State<CameraDetailPage>
                 ),
               ),
             ),
-            
+
             const SizedBox(height: 16),
-            
+
             // Turn On Camera button (when camera is inactive)
-            if (!_isCameraOn)
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: _turnCameraOn,
-                  icon: const Icon(Icons.videocam),
-                  label: const Text('Turn On Camera'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    foregroundColor: Colors.white,
-                    minimumSize: const Size(0, 48),
-                  ),
+            // Camera Toggle Button
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _toggleCamera,
+                icon: Icon(_isCameraOn ? Icons.videocam_off : Icons.videocam),
+                label: Text(_isCameraOn ? 'Turn Off Camera' : 'Turn On Camera'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _isCameraOn ? Colors.red : Colors.green,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(0, 48),
                 ),
               ),
-            
+            ),
+
             const SizedBox(height: 16),
-            
+
+            // NEW: Refresh Status button
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _getCameraStatus,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Refresh Camera Status'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(0, 48),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
             // Start stream button
             SizedBox(
               width: double.infinity,
@@ -708,7 +885,7 @@ class _CameraDetailPageState extends State<CameraDetailPage>
   }
 
   /// Build Debug Card
-  /// 
+  ///
   /// Creates a card with debug logs for troubleshooting.
   Widget _buildDebugCard() {
     return Card(
@@ -776,12 +953,12 @@ class _CameraDetailPageState extends State<CameraDetailPage>
   }
 
   /// Build Floating Action Button
-  /// 
+  ///
   /// Creates a floating action button for quick camera stream access.
   Widget _buildFloatingActionButton() {
     return FloatingActionButton.extended(
       onPressed: _camera.isOnline ? _startCameraStream : null,
-      backgroundColor: _camera.isOnline 
+      backgroundColor: _camera.isOnline
           ? Theme.of(context).floatingActionButtonTheme.backgroundColor
           : Colors.grey,
       foregroundColor: Colors.white,
@@ -791,7 +968,7 @@ class _CameraDetailPageState extends State<CameraDetailPage>
   }
 
   /// Get Activity Icon
-  /// 
+  ///
   /// Returns appropriate icon for activity type.
   IconData _getActivityIcon(String type) {
     switch (type) {
@@ -815,7 +992,7 @@ class _CameraDetailPageState extends State<CameraDetailPage>
   }
 
   /// Get Activity Color
-  /// 
+  ///
   /// Returns appropriate color for activity type.
   Color _getActivityColor(String type) {
     switch (type) {
@@ -845,20 +1022,22 @@ class _CameraDetailPageState extends State<CameraDetailPage>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Camera Info', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Text(
+              'Camera Info',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 12),
             _buildInfoRow('ID', _camera.id?.toString() ?? 'N/A'),
             _buildInfoRow('Code', _camera.camCode),
-            _buildInfoRow('Name', _camera.name),
             _buildInfoRow('Home ID', _camera.homeId.toString()),
-            _buildInfoRow('Home Name', _camera.homeName),
             _buildInfoRow('Created At', _camera.createdAt?.toString() ?? 'N/A'),
             _buildInfoRow('Updated At', _camera.updatedAt?.toString() ?? 'N/A'),
-            _buildInfoRow('Date Creation', _camera.dateCreation?.toString() ?? 'N/A'),
+            _buildInfoRow(
+              'Date Creation',
+              _camera.dateCreation?.toString() ?? 'N/A',
+            ),
             _buildInfoRow('Longitude', _camera.longitude?.toString() ?? 'N/A'),
             _buildInfoRow('Latitude', _camera.latitude?.toString() ?? 'N/A'),
-            _buildInfoRow('Location', _camera.locationDescription),
-            _buildInfoRow('Health Status', _camera.healthStatus),
           ],
         ),
       ),
@@ -870,12 +1049,16 @@ class _CameraDetailPageState extends State<CameraDetailPage>
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         children: [
-          SizedBox(width: 110, child: Text(label + ':', style: const TextStyle(fontWeight: FontWeight.w500))),
+          SizedBox(
+            width: 110,
+            child: Text(
+              label + ':',
+              style: const TextStyle(fontWeight: FontWeight.w500),
+            ),
+          ),
           Expanded(child: Text(value)),
         ],
       ),
     );
   }
 }
-
-

@@ -1,3 +1,5 @@
+import 'package:bellui/pages/add_camera_page.dart';
+import 'package:bellui/pages/add_home_page.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -13,6 +15,7 @@ import 'package:bellui/pages/camera_detail_page.dart';
 import 'package:bellui/pages/home_detail_page.dart';
 import 'package:bellui/pages/login_register_page.dart';
 import 'package:bellui/pages/video_call_page.dart';
+import 'package:bellui/pages/settings_page.dart';
 
 /**
  * Enhanced Main Dashboard
@@ -862,19 +865,17 @@ class _EnhancedMainDashboardState extends State<EnhancedMainDashboard>
           final query = _searchQuery.toLowerCase();
           
           _filteredCameras = _cameras.where((camera) {
-            return camera.name.toLowerCase().contains(query) ||
-                   camera.locationDescription.toLowerCase().contains(query) ||
-                   camera.camCode.toLowerCase().contains(query);
+            return camera.homeId.toString().toLowerCase().contains(query);
           }).toList();
           
           _filteredHomes = _homes.where((home) {
-            return home.name.toLowerCase().contains(query) ||
-                   home.address.toLowerCase().contains(query);
+            return home.id.toString().toLowerCase().contains(query);
           }).toList();
         }
       });
     }
   }
+
 
   /**
    * Handle Camera Alert
@@ -1131,12 +1132,28 @@ class _EnhancedMainDashboardState extends State<EnhancedMainDashboard>
         PopupMenuButton<String>(
           onSelected: (value) {
             switch (value) {
+              case 'settings':
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const SettingsPage()),
+                );
+                break;
               case 'logout':
                 _logout();
                 break;
             }
           },
           itemBuilder: (context) => [
+            const PopupMenuItem(
+              value: 'settings',
+              child: Row(
+                children: [
+                  Icon(Icons.settings),
+                  SizedBox(width: 8),
+                  Text('Settings'),
+                ],
+              ),
+            ),
             PopupMenuItem(
               value: 'logout',
               child: Row(
@@ -1638,7 +1655,7 @@ class _EnhancedMainDashboardState extends State<EnhancedMainDashboard>
                     leading: const Icon(Icons.add_a_photo),
                     title: const Text('Add Camera'),
                     onTap: () {
-                      Navigator.pop(context);
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => AddCameraPage()));
                       // Navigate to add camera page
                       if (mounted) {
                         UIUtils.showSnackBar(context, 'Add Camera feature coming soon!', backgroundColor: Colors.blue);
@@ -1649,7 +1666,7 @@ class _EnhancedMainDashboardState extends State<EnhancedMainDashboard>
                     leading: const Icon(Icons.add_home),
                     title: const Text('Add Home'),
                     onTap: () {
-                      Navigator.pop(context);
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => AddHomePage()));
                       // Navigate to add home page
                       if (mounted) {
                         UIUtils.showSnackBar(context, 'Add Home feature coming soon!', backgroundColor: Colors.blue);

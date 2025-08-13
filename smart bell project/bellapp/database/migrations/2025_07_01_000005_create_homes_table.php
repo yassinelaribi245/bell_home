@@ -16,7 +16,7 @@ return new class extends Migration
             $table->double("superficie");
             $table->double("longitude");
             $table->double("latitude");
-            $table->integer("num_cam");
+            $table->integer("num_cam")->default(0);
             $table->Integer('id_user');
             $table->timestamps();
         });

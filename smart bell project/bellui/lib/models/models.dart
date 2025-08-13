@@ -24,27 +24,39 @@
  */
 class User {
   final int? id;
-  final String nom;           // User's full name
-  final String email;         // Email address (unique)
-  final String? phone;        // Optional phone number
-  final String? avatar;       // Profile picture URL
-  final DateTime? createdAt;  // Account creation date
-  final DateTime? updatedAt;  // Last profile update
-  final bool isActive;        // Account status
-  final String role;          // User role (admin, user, etc.)
-  final Map<String, dynamic>? preferences; // User preferences and settings
+  final String nom;                     // User's last name
+  final String prenom;                  // User's first name
+  final DateTime? dateNaissance;        // Date of birth
+  final int? idVille;                   // City ID (foreign key)
+  final int? codePostal;                // Postal code
+  final int? numTel;                    // Phone number
+  final String email;                   // Email address (unique)
+  final String? fcm;                    // FCM token for notifications
+  final String role;                    // User role (admin, user, etc.)
+  final bool isActive;                  // Account status
+  final bool isBanned;                  // Banned status
+  final bool isVerified;                // Email verification status
+  final DateTime? lastLoginAt;          // Last login timestamp
+  final DateTime? createdAt;            // Account creation date
+  final DateTime? updatedAt;            // Last profile update
 
   const User({
     this.id,
     required this.nom,
+    required this.prenom,
+    this.dateNaissance,
+    this.idVille,
+    this.codePostal,
+    this.numTel,
     required this.email,
-    this.phone,
-    this.avatar,
+    this.fcm,
+    this.role = 'user',
+    this.isActive = true,
+    this.isBanned = false,
+    this.isVerified = false,
+    this.lastLoginAt,
     this.createdAt,
     this.updatedAt,
-    this.isActive = true,
-    this.role = 'user',
-    this.preferences,
   });
 
   /**
@@ -53,19 +65,31 @@ class User {
    * Deserializes user data from API response or local storage.
    */
   factory User.fromJson(Map<String, dynamic> json) {
+    // Helper function to parse boolean values from int or bool
+    bool parseBool(dynamic value) {
+      if (value is bool) return value;
+      if (value is int) return value == 1;
+      if (value is String) return value == '1' || value.toLowerCase() == 'true';
+      return false;
+    }
+
     return User(
       id: json['id'],
-      nom: json['nom'] ?? json['name'] ?? '',
+      nom: json['nom'] ?? '',
+      prenom: json['prenom'] ?? '',
+      dateNaissance: json['date_naissance'] != null ? DateTime.parse(json['date_naissance']) : null,
+      idVille: json['id_ville'],
+      codePostal: json['code_postal'],
+      numTel: json['num_tel'],
       email: json['email'] ?? '',
-      phone: json['phone'],
-      avatar: json['avatar'],
+      fcm: json['fcm'],
+      role: json['role'] ?? 'user',
+      isActive: parseBool(json['is_active']),
+      isBanned: parseBool(json['is_banned']),
+      isVerified: parseBool(json['is_verified']),
+      lastLoginAt: json['last_login_at'] != null ? DateTime.parse(json['last_login_at']) : null,
       createdAt: json['created_at'] != null ? DateTime.parse(json['created_at']) : null,
       updatedAt: json['updated_at'] != null ? DateTime.parse(json['updated_at']) : null,
-      isActive: json['is_active'] ?? true,
-      role: json['role'] ?? 'user',
-      preferences: json['preferences'] is Map<String, dynamic> 
-          ? json['preferences'] 
-          : null,
     );
   }
 
@@ -78,14 +102,20 @@ class User {
     return {
       'id': id,
       'nom': nom,
+      'prenom': prenom,
+      'date_naissance': dateNaissance?.toIso8601String(),
+      'id_ville': idVille,
+      'code_postal': codePostal,
+      'num_tel': numTel,
       'email': email,
-      'phone': phone,
-      'avatar': avatar,
+      'fcm': fcm,
+      'role': role,
+      'is_active': isActive,
+      'is_banned': isBanned,
+      'is_verified': isVerified,
+      'last_login_at': lastLoginAt?.toIso8601String(),
       'created_at': createdAt?.toIso8601String(),
       'updated_at': updatedAt?.toIso8601String(),
-      'is_active': isActive,
-      'role': role,
-      'preferences': preferences,
     };
   }
 
@@ -98,26 +128,38 @@ class User {
   User copyWith({
     int? id,
     String? nom,
+    String? prenom,
+    DateTime? dateNaissance,
+    int? idVille,
+    int? codePostal,
+    int? numTel,
     String? email,
-    String? phone,
-    String? avatar,
+    String? fcm,
+    String? role,
+    bool? isActive,
+    bool? isBanned,
+    bool? isVerified,
+    DateTime? lastLoginAt,
     DateTime? createdAt,
     DateTime? updatedAt,
-    bool? isActive,
-    String? role,
-    Map<String, dynamic>? preferences,
   }) {
     return User(
       id: id ?? this.id,
       nom: nom ?? this.nom,
+      prenom: prenom ?? this.prenom,
+      dateNaissance: dateNaissance ?? this.dateNaissance,
+      idVille: idVille ?? this.idVille,
+      codePostal: codePostal ?? this.codePostal,
+      numTel: numTel ?? this.numTel,
       email: email ?? this.email,
-      phone: phone ?? this.phone,
-      avatar: avatar ?? this.avatar,
+      fcm: fcm ?? this.fcm,
+      role: role ?? this.role,
+      isActive: isActive ?? this.isActive,
+      isBanned: isBanned ?? this.isBanned,
+      isVerified: isVerified ?? this.isVerified,
+      lastLoginAt: lastLoginAt ?? this.lastLoginAt,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
-      isActive: isActive ?? this.isActive,
-      role: role ?? this.role,
-      preferences: preferences ?? this.preferences,
     );
   }
 
@@ -126,7 +168,10 @@ class User {
    * 
    * Returns the user's display name, falling back to email if name is empty.
    */
-  String get displayName => nom.isNotEmpty ? nom : email;
+  String get displayName {
+    final fullName = '$prenom $nom'.trim();
+    return fullName.isNotEmpty ? fullName : email;
+  }
 
   /**
    * Get initials
@@ -134,12 +179,52 @@ class User {
    * Returns user initials for avatar placeholders.
    */
   String get initials {
-    if (nom.isEmpty) return email.isNotEmpty ? email[0].toUpperCase() : '?';
-    final parts = nom.split(' ');
-    if (parts.length >= 2) {
-      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    if (prenom.isNotEmpty && nom.isNotEmpty) {
+      return '${prenom[0]}${nom[0]}'.toUpperCase();
+    } else if (prenom.isNotEmpty) {
+      return prenom[0].toUpperCase();
+    } else if (nom.isNotEmpty) {
+      return nom[0].toUpperCase();
+    } else if (email.isNotEmpty) {
+      return email[0].toUpperCase();
     }
-    return nom[0].toUpperCase();
+    return '?';
+  }
+
+  /**
+   * Get formatted phone number
+   * 
+   * Returns formatted phone number string.
+   */
+  String get formattedPhone {
+    if (numTel == null) return 'Not provided';
+    return numTel.toString();
+  }
+
+  /**
+   * Get formatted birth date
+   * 
+   * Returns formatted birth date string.
+   */
+  String get formattedBirthDate {
+    if (dateNaissance == null) return 'Not provided';
+    return '${dateNaissance!.day}/${dateNaissance!.month}/${dateNaissance!.year}';
+  }
+
+  /**
+   * Get age
+   * 
+   * Returns user's age based on birth date.
+   */
+  int? get age {
+    if (dateNaissance == null) return null;
+    final now = DateTime.now();
+    int age = now.year - dateNaissance!.year;
+    if (now.month < dateNaissance!.month || 
+        (now.month == dateNaissance!.month && now.day < dateNaissance!.day)) {
+      age--;
+    }
+    return age;
   }
 
   /**
@@ -149,8 +234,15 @@ class User {
    */
   bool get isAdmin => role == 'admin' || role == 'super_admin';
 
+  /**
+   * Check if user can login
+   * 
+   * Returns true if the user can login (active, not banned, verified).
+   */
+  bool get canLogin => isActive && !isBanned && isVerified;
+
   @override
-  String toString() => 'User(id: $id, nom: $nom, email: $email)';
+  String toString() => 'User(id: $id, nom: $nom, prenom: $prenom, email: $email)';
 
   @override
   bool operator ==(Object other) =>

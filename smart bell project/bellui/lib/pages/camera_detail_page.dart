@@ -632,6 +632,92 @@ class _CameraDetailPageState extends State<CameraDetailPage>
     }
   }
 
+  /// Show Delete Camera Dialog
+  ///
+  /// Shows a confirmation dialog before deleting the camera.
+  void _showDeleteCameraDialog() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Delete Camera'),
+          content: Text(
+            'Are you sure you want to delete camera "${_camera.name}"?\n\nThis action cannot be undone.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _deleteCamera();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// Delete Camera
+  ///
+  /// Calls the API to delete the camera and navigates back.
+  Future<void> _deleteCamera() async {
+    if (_camera.id == null) {
+      UIUtils.showSnackBar(
+        context,
+        'Cannot delete camera: Invalid camera ID',
+        backgroundColor: Colors.red,
+      );
+      return;
+    }
+
+    try {
+      setState(() {
+        _isLoading = true;
+      });
+
+      final response = await _apiService.deleteCamera(_camera.id!);
+      
+      if (response.success) {
+        UIUtils.showSnackBar(
+          context,
+          'Camera deleted successfully',
+          backgroundColor: Colors.green,
+        );
+        
+        // Navigate back to previous screen
+        if (mounted) {
+          Navigator.of(context).pop();
+        }
+      } else {
+        throw Exception(response.error ?? 'Failed to delete camera');
+      }
+    } catch (e) {
+      _addDebugLog('Error deleting camera: $e');
+      UIUtils.showSnackBar(
+        context,
+        'Error deleting camera: $e',
+        backgroundColor: Colors.red,
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
   @override
   void dispose() {
     socket!.emit('leave', {'room': _camera.camCode});
@@ -847,15 +933,15 @@ class _CameraDetailPageState extends State<CameraDetailPage>
 
             const SizedBox(height: 16),
 
-            // NEW: Refresh Status button
+            // NEW: Delete Camera button
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: _getCameraStatus,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Refresh Camera Status'),
+                onPressed: _showDeleteCameraDialog,
+                icon: const Icon(Icons.delete),
+                label: const Text('Delete Camera'),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue,
+                  backgroundColor: Colors.red,
                   foregroundColor: Colors.white,
                   minimumSize: const Size(0, 48),
                 ),

@@ -3,9 +3,11 @@
 namespace App\Http\Controllers\Api;
 use App\Models\Camera;
 use App\Models\Home;
+use App\Models\home as ModelsHome;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades;
 
 class cameraController extends Controller
 {
@@ -13,7 +15,45 @@ class cameraController extends Controller
     {
         return camera::all();
     }
-public function getUserByCameraCode(Request $request)
+    public function store(Request $request)
+    {
+        $validated = $request->validate([
+            'cam_code' => 'required|string|unique:camera,cam_code',
+            'longitude' => 'required|numeric',
+            'latitude' => 'required|numeric',
+            'id_home' => 'required|exists:homes,id'
+        ]);
+
+        $camera = Camera::create([
+            ...$validated,
+            'date_creation' => now()
+        ]);
+        ModelsHome::where('id', $validated['id_home'])->increment('num_cam');
+        return response()->json([
+            'success' => true,
+            'message' => 'Camera created successfully',
+            'camera' => $camera
+        ], 201);
+    }
+
+    public function getCameraCode(Request $request)
+    {
+
+        // Find the camera
+        $camera = Camera::select('cam_code')->where('cam_code', '!=', null);
+
+        if (!$camera) {
+            return response()->json(['error' => 'Camera not found'], 404);
+        }
+
+
+        return response()->json([
+            'cameracode' => [
+                $camera->pluck('cam_code')
+            ]
+        ]);
+    }
+    public function getUserByCameraCode(Request $request)
     {
         $request->validate([
             'camera_code' => 'required|string',
@@ -54,39 +94,39 @@ public function getUserByCameraCode(Request $request)
         ]);
     }
     public function cameras_user(Request $request)
-{
-    $request->validate([
-        'email' => 'required|email',
-    ]);
+    {
+        $request->validate([
+            'email' => 'required|email',
+        ]);
 
-    // Get the user by email
-    $user = User::where('email', $request->input('email'))->first();
+        // Get the user by email
+        $user = User::where('email', $request->input('email'))->first();
 
-    if (!$user) {
-        return response()->json(['error' => 'User not found'], 404);
+        if (!$user) {
+            return response()->json(['error' => 'User not found'], 404);
+        }
+
+        // Get all homes owned by the user (you must define a homes() relationship in User model)
+        $homes = Home::where('id_user', $user->id)->get();
+
+        if ($homes->isEmpty()) {
+            return response()->json(['error' => 'No homes found for user'], 404);
+        }
+
+        // Collect all cameras from all homes (assuming each Home has a cameras() relationship)
+        $cameras = collect();
+
+        foreach ($homes as $home) {
+            $cameras = $cameras->merge(camera::where('id_home', $home->id)->get());
+        }
+
+        // Return the list of cameras
+        return response()->json([
+            'user_email' => $user->email,
+            'camera_count' => $cameras->count(),
+            'cameras' => $cameras,
+        ]);
     }
-
-    // Get all homes owned by the user (you must define a homes() relationship in User model)
-    $homes = $user->homes;
-
-    if ($homes->isEmpty()) {
-        return response()->json(['error' => 'No homes found for user'], 404);
-    }
-
-    // Collect all cameras from all homes (assuming each Home has a cameras() relationship)
-    $cameras = collect();
-
-    foreach ($homes as $home) {
-        $cameras = $cameras->merge($home->cameras);
-    }
-
-    // Return the list of cameras
-    return response()->json([
-        'user_email' => $user->email,
-        'camera_count' => $cameras->count(),
-        'cameras' => $cameras,
-    ]);
-}
 
     /**
      * Show the form for creating a new resource.
@@ -99,10 +139,6 @@ public function getUserByCameraCode(Request $request)
     /**
      * Store a newly created resource in storage.
      */
-    public function store(Request $request)
-    {
-        //
-    }
 
     /**
      * Display the specified resource.
@@ -131,13 +167,15 @@ public function getUserByCameraCode(Request $request)
     /**
      * Remove the specified resource from storage.
      */
-    public function destroy(string $id)
+    public function destroy(string $cameraId)
     {
-        $camera = Camera::find($id);
+        $camera = Camera::find($cameraId);
         if ($camera) {
             $camera->delete();
+            ModelsHome::where('id', $camera->id_home)->decrement('num_cam');
             return response()->json(['message' => 'Camera deleted successfully']);
         }
+        
         return response()->json(['error' => 'Camera not found'], 404);
     }
 
@@ -263,7 +301,7 @@ public function getUserByCameraCode(Request $request)
 
         try {
             \Log::info('Camera status update received', $request->all());
-            
+
             $camera = Camera::where('cam_code', $request->input('camera_code'))->first();
 
             if (!$camera) {
@@ -306,7 +344,7 @@ public function getUserByCameraCode(Request $request)
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
-            
+
             return response()->json([
                 'error' => 'Failed to update camera status',
                 'message' => $e->getMessage()

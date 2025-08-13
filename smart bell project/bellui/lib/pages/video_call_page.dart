@@ -51,7 +51,7 @@ class _VideoCallPageState extends State<VideoCallPage> {
   final String signalingServerUrl = ApiService.nodeServerUrl;
 
   // This URL points to your Ngrok-hosted Node.js server's new credential endpoint
-  final String twilioTurnCredentialServerUrl = 'https://21fad3a22452.ngrok-free.app/twilio_turn_credentials'; 
+  final String twilioTurnCredentialServerUrl = '${ApiService.nodeServerUrl}/twilio_turn_credentials';
 
   @override
   void initState() {

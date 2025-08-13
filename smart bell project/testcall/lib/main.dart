@@ -40,6 +40,8 @@ class _CameraTestingScreenState extends State<CameraTestingScreen> {
   RTCPeerConnection? _peerConnection;
   MediaStream? _localStream;
   bool isCaller = true;
+  List<String> _availableCameraCodes = [];
+  bool _showCameraSelector = false;
 
   String _connectionStatus = 'Disconnected';
   bool _isPeerConnectionReady = false;
@@ -52,11 +54,11 @@ class _CameraTestingScreenState extends State<CameraTestingScreen> {
 
   // Configuration
   final String signalingServerUrl =
-      'https://ff346afa66a9.ngrok-free.app'; // Replace with your actual ngrok URL or server address
-  final String cameraCode = 'cam123'; // Replace with your actual camera code
+      'https://bd17d7ab2001.ngrok-free.app'; // Replace with your actual ngrok URL or server address
+  String cameraCode = 'cam123'; // Replace with your actual camera code
   // This URL points to your Ngrok-hosted Node.js server's new credential endpoint
   final String twilioTurnCredentialServerUrl =
-      'https://ff346afa66a9.ngrok-free.app/twilio_turn_credentials';
+      'https://bd17d7ab2001.ngrok-free.app/twilio_turn_credentials';
 
   @override
   void initState() {
@@ -64,8 +66,13 @@ class _CameraTestingScreenState extends State<CameraTestingScreen> {
     _initRenderers();
     _addDebugLog('🔔 Camera Testing App Started');
 
-    // Automatically connect to server on startup
-    _connectToServer();
+    // Show camera selector BEFORE connecting to server
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _showCameraCodeSelector();
+    });
+
+    // Don't connect to server automatically - wait for camera code selection
+    // _connectToServer(); // Remove this line
   }
 
   @override
@@ -90,6 +97,168 @@ class _CameraTestingScreenState extends State<CameraTestingScreen> {
     }
     debugPrint(message);
   }
+
+  // Fetch camera codes from API
+  Future<void> _fetchCameraCodes() async {
+  try {
+    _addDebugLog('🔍 Fetching camera codes from API...');
+    
+    final response = await http.get(
+      Uri.parse('https://b845249abbf8.ngrok-free.app/api/getcameracode'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+    ).timeout(const Duration(seconds: 10));
+    
+    _addDebugLog('📡 API Response Status: ${response.statusCode}');
+    _addDebugLog('📡 API Response Body: ${response.body}');
+    
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      _addDebugLog('📊 Parsed data: $data');
+      
+      if (data['cameracode'] != null && data['cameracode'].isNotEmpty) {
+        final List<dynamic> codes = data['cameracode'][0];
+        setState(() {
+          _availableCameraCodes = codes.cast<String>();
+        });
+        _addDebugLog('✅ Successfully loaded ${_availableCameraCodes.length} camera codes');
+      } else {
+        _addDebugLog('⚠️ No camera codes found in response');
+      }
+    } else {
+      _addDebugLog('❌ API call failed with status: ${response.statusCode}');
+    }
+  } catch (e) {
+    _addDebugLog('❌ Error fetching camera codes: $e');
+    // Show error in dialog
+    setState(() {
+      _availableCameraCodes = ['Error loading codes'];
+    });
+  }
+}
+
+  // Show camera code selector popup
+  void _showCameraCodeSelector() async {
+    await _fetchCameraCodes();
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => _buildCameraCodeDialog(),
+    );
+  }
+
+  // Build camera code selection dialog
+  Widget _buildCameraCodeDialog() {
+  String? selectedCode;
+  
+  return StatefulBuilder(
+    builder: (context, setDialogState) {
+      return Dialog(
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          constraints: const BoxConstraints(maxWidth: 400, maxHeight: 500),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.camera_alt, color: Colors.orange),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Select Camera Code',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              
+              // Loading or content
+              Expanded(
+                child: _availableCameraCodes.isEmpty
+                    ? const Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            CircularProgressIndicator(),
+                            SizedBox(height: 16),
+                            Text('Loading camera codes...'),
+                          ],
+                        ),
+                      )
+                    : ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: _availableCameraCodes.length,
+                        itemBuilder: (context, index) {
+                          final code = _availableCameraCodes[index];
+                          return Card(
+                            child: ListTile(
+                              title: Text(code),
+                              leading: Radio<String>(
+                                value: code,
+                                groupValue: selectedCode,
+                                onChanged: (value) {
+                                  setDialogState(() {
+                                    selectedCode = value;
+                                  });
+                                },
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+              
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  TextButton(
+                    onPressed: () async {
+                      setDialogState(() {
+                        _availableCameraCodes.clear();
+                      });
+                      await _fetchCameraCodes();
+                      setDialogState(() {});
+                    },
+                    child: const Text('Refresh'),
+                  ),
+                  ElevatedButton(
+                    onPressed: selectedCode != null && selectedCode != 'Error loading codes'
+                        ? () {
+                            _updateCameraCode(selectedCode!);
+                            Navigator.of(context).pop();
+                          }
+                        : null,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: const Text('Connect'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
+
+  // Update camera code without restarting app
+ void _updateCameraCode(String newCameraCode) {
+  setState(() {
+    cameraCode = newCameraCode;
+  });
+  _addDebugLog('📹 Camera code updated to: $newCameraCode');
+  
+  // Now connect to server with the selected camera code
+  _connectToServer();
+}
 
   Future<Map<String, dynamic>> _fetchTwilioTurnCredentials() async {
     try {

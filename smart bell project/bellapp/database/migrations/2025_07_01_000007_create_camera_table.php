@@ -14,8 +14,8 @@ return new class extends Migration
         Schema::create('camera', function (Blueprint $table) {
             $table->id();
             $table->dateTime("date_creation");
-            $table->boolean("is_active");
-            $table->boolean("is_recording");
+            $table->boolean("is_active")->default(0);
+            $table->boolean("is_recording")->default(0);
             $table->string("cam_code")->nullable();
             $table->double("longitude");
             $table->double("latitude");

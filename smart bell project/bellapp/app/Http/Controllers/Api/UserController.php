@@ -51,9 +51,15 @@ class UserController extends Controller
             'user' => $user,
         ]);
     }
-
-
-
+    public function get_user($email){
+        $user_info=user::select('*')
+    ->selectRaw('users.*')
+    ->where('email', $email)
+    ->get()->makeHidden(['password']);
+    return response()->json([
+            'userinfo' => $user_info
+        ]);
+    }
 
     public function login(Request $request)
     {

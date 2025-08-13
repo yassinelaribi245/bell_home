@@ -23,9 +23,9 @@ import 'package:flutter/foundation.dart'; // For debugPrint
  */
 class ApiService {
   // API configuration
-  static const String _baseUrl = 'https://e0ce9b34503a.ngrok-free.app/api';
+  static const String baseUrl = 'https://b845249abbf8.ngrok-free.app/api';
   /// Node.js server URL for Socket.IO (set your actual Node.js server URL here)
-  static const String nodeServerUrl = 'https://ff346afa66a9.ngrok-free.app';
+  static const String nodeServerUrl = 'https://bd17d7ab2001.ngrok-free.app';
   static const Duration _timeout = Duration(seconds: 30);
   static const int _maxRetries = 3;
   
@@ -95,7 +95,7 @@ class ApiService {
     Map<String, dynamic>? body,
     int retryCount = 0,
   }) async {
-    final url = Uri.parse('$_baseUrl$endpoint');
+    final url = Uri.parse('$baseUrl$endpoint');
     final headers = _getHeaders();
     
     try {
@@ -337,8 +337,26 @@ class ApiService {
    * 
    * Deletes a home and all associated cameras.
    */
+  Future<ApiResponse<User>> getUserInfo(String email) async {
+    final response = await _makeRequest('GET', '/userinfo/$email');
+    
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      final userInfoList = data['userinfo'] as List;
+      
+      if (userInfoList.isNotEmpty) {
+        final userJson = userInfoList[0] as Map<String, dynamic>;
+        final user = User.fromJson(userJson);
+        return ApiResponse.success(user, response.statusCode);
+      } else {
+        return ApiResponse.error('User not found', 404);
+      }
+    } else {
+      return ApiResponse.error('Failed to load user info', response.statusCode);
+    }
+  }
   Future<ApiResponse<void>> deleteHome(int homeId) async {
-    final response = await _makeRequest('DELETE', '/homes/$homeId');
+    final response = await _makeRequest('DELETE', '/deletehome/$homeId');
     
     if (response.statusCode == 200) {
       return ApiResponse.success(null, response.statusCode);
@@ -519,7 +537,7 @@ class ApiService {
    */
   Future<ApiResponse<List<Camera>>> getHomeCameras(int homeId) async {
     try {
-      final response = await _makeRequest('GET', '/homes/$homeId/cameras');
+      final response = await _makeRequest('GET', '/homecameras/$homeId');
       
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -591,7 +609,7 @@ class ApiService {
    * Deletes a camera and all associated data.
    */
   Future<ApiResponse<void>> deleteCamera(int cameraId) async {
-    final response = await _makeRequest('DELETE', '/cameras/$cameraId');
+    final response = await _makeRequest('DELETE', '/deletecamera/$cameraId');
     
     if (response.statusCode == 200) {
       return ApiResponse.success(null, response.statusCode);
@@ -833,7 +851,7 @@ class ApiService {
    */
   Future<ApiResponse<Map<String, dynamic>>> uploadFile(String filePath, String endpoint) async {
     try {
-      final request = http.MultipartRequest('POST', Uri.parse('$_baseUrl$endpoint'));
+      final request = http.MultipartRequest('POST', Uri.parse('$baseUrl$endpoint'));
       request.headers.addAll(_getHeaders());
       request.files.add(await http.MultipartFile.fromPath('file', filePath));
       

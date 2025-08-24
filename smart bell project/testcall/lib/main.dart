@@ -3,6 +3,8 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:typed_data';
+import 'package:http_parser/http_parser.dart';
 
 void main() {
   runApp(const CameraTestingApp());
@@ -51,14 +53,15 @@ class _CameraTestingScreenState extends State<CameraTestingScreen> {
   bool _isCallActive = false;
   bool _mobileClientAvailable = false;
   final List<String> _debugLogs = [];
-
+  bool _isCapturing = false;
+  int _lastBurstCount = 0;
   // Configuration
-  final String signalingServerUrl =
-      'https://bd17d7ab2001.ngrok-free.app'; // Replace with your actual ngrok URL or server address
-  String cameraCode = 'cam123'; // Replace with your actual camera code
-  // This URL points to your Ngrok-hosted Node.js server's new credential endpoint
+  final String signalingServerUrl = 'https://538ea5f38580.ngrok-free.app';
+  String cameraCode = 'cam123';
   final String twilioTurnCredentialServerUrl =
-      'https://bd17d7ab2001.ngrok-free.app/twilio_turn_credentials';
+      'https://538ea5f38580.ngrok-free.app/twilio_turn_credentials';
+  final String uploadFramesUrl =
+      'https://e39ad83dbdb5.ngrok-free.app/bellapp/public/api/upload-frames'; // e.g. https://<ngrok>/api/upload-frames
 
   @override
   void initState() {
@@ -100,44 +103,48 @@ class _CameraTestingScreenState extends State<CameraTestingScreen> {
 
   // Fetch camera codes from API
   Future<void> _fetchCameraCodes() async {
-  try {
-    _addDebugLog('🔍 Fetching camera codes from API...');
-    
-    final response = await http.get(
-      Uri.parse('https://b845249abbf8.ngrok-free.app/api/getcameracode'),
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-    ).timeout(const Duration(seconds: 10));
-    
-    _addDebugLog('📡 API Response Status: ${response.statusCode}');
-    _addDebugLog('📡 API Response Body: ${response.body}');
-    
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-      _addDebugLog('📊 Parsed data: $data');
-      
-      if (data['cameracode'] != null && data['cameracode'].isNotEmpty) {
-        final List<dynamic> codes = data['cameracode'][0];
-        setState(() {
-          _availableCameraCodes = codes.cast<String>();
-        });
-        _addDebugLog('✅ Successfully loaded ${_availableCameraCodes.length} camera codes');
+    try {
+      _addDebugLog('🔍 Fetching camera codes from API...');
+
+      final response = await http
+          .get(
+            Uri.parse('https://e39ad83dbdb5.ngrok-free.app/bellapp/public/api/getcameracode'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+          )
+          .timeout(const Duration(seconds: 10));
+
+      _addDebugLog('📡 API Response Status: ${response.statusCode}');
+      _addDebugLog('📡 API Response Body: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        _addDebugLog('📊 Parsed data: $data');
+
+        if (data['cameracode'] != null && data['cameracode'].isNotEmpty) {
+          final List<dynamic> codes = data['cameracode'][0];
+          setState(() {
+            _availableCameraCodes = codes.cast<String>();
+          });
+          _addDebugLog(
+            '✅ Successfully loaded ${_availableCameraCodes.length} camera codes',
+          );
+        } else {
+          _addDebugLog('⚠️ No camera codes found in response');
+        }
       } else {
-        _addDebugLog('⚠️ No camera codes found in response');
+        _addDebugLog('❌ API call failed with status: ${response.statusCode}');
       }
-    } else {
-      _addDebugLog('❌ API call failed with status: ${response.statusCode}');
+    } catch (e) {
+      _addDebugLog('❌ Error fetching camera codes: $e');
+      // Show error in dialog
+      setState(() {
+        _availableCameraCodes = ['Error loading codes'];
+      });
     }
-  } catch (e) {
-    _addDebugLog('❌ Error fetching camera codes: $e');
-    // Show error in dialog
-    setState(() {
-      _availableCameraCodes = ['Error loading codes'];
-    });
   }
-}
 
   // Show camera code selector popup
   void _showCameraCodeSelector() async {
@@ -153,112 +160,117 @@ class _CameraTestingScreenState extends State<CameraTestingScreen> {
 
   // Build camera code selection dialog
   Widget _buildCameraCodeDialog() {
-  String? selectedCode;
-  
-  return StatefulBuilder(
-    builder: (context, setDialogState) {
-      return Dialog(
-        child: Container(
-          padding: const EdgeInsets.all(20),
-          constraints: const BoxConstraints(maxWidth: 400, maxHeight: 500),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.camera_alt, color: Colors.orange),
-                  const SizedBox(width: 8),
-                  const Text(
-                    'Select Camera Code',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              
-              // Loading or content
-              Expanded(
-                child: _availableCameraCodes.isEmpty
-                    ? const Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            CircularProgressIndicator(),
-                            SizedBox(height: 16),
-                            Text('Loading camera codes...'),
-                          ],
-                        ),
-                      )
-                    : ListView.builder(
-                        shrinkWrap: true,
-                        itemCount: _availableCameraCodes.length,
-                        itemBuilder: (context, index) {
-                          final code = _availableCameraCodes[index];
-                          return Card(
-                            child: ListTile(
-                              title: Text(code),
-                              leading: Radio<String>(
-                                value: code,
-                                groupValue: selectedCode,
-                                onChanged: (value) {
-                                  setDialogState(() {
-                                    selectedCode = value;
-                                  });
-                                },
-                              ),
-                            ),
-                          );
-                        },
+    String? selectedCode;
+
+    return StatefulBuilder(
+      builder: (context, setDialogState) {
+        return Dialog(
+          child: Container(
+            padding: const EdgeInsets.all(20),
+            constraints: const BoxConstraints(maxWidth: 400, maxHeight: 500),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.camera_alt, color: Colors.orange),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'Select Camera Code',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
                       ),
-              ),
-              
-              const SizedBox(height: 16),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  TextButton(
-                    onPressed: () async {
-                      setDialogState(() {
-                        _availableCameraCodes.clear();
-                      });
-                      await _fetchCameraCodes();
-                      setDialogState(() {});
-                    },
-                    child: const Text('Refresh'),
-                  ),
-                  ElevatedButton(
-                    onPressed: selectedCode != null && selectedCode != 'Error loading codes'
-                        ? () {
-                            _updateCameraCode(selectedCode!);
-                            Navigator.of(context).pop();
-                          }
-                        : null,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.orange,
-                      foregroundColor: Colors.white,
                     ),
-                    child: const Text('Connect'),
-                  ),
-                ],
-              ),
-            ],
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                // Loading or content
+                Expanded(
+                  child: _availableCameraCodes.isEmpty
+                      ? const Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              CircularProgressIndicator(),
+                              SizedBox(height: 16),
+                              Text('Loading camera codes...'),
+                            ],
+                          ),
+                        )
+                      : ListView.builder(
+                          shrinkWrap: true,
+                          itemCount: _availableCameraCodes.length,
+                          itemBuilder: (context, index) {
+                            final code = _availableCameraCodes[index];
+                            return Card(
+                              child: ListTile(
+                                title: Text(code),
+                                leading: Radio<String>(
+                                  value: code,
+                                  groupValue: selectedCode,
+                                  onChanged: (value) {
+                                    setDialogState(() {
+                                      selectedCode = value;
+                                    });
+                                  },
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    TextButton(
+                      onPressed: () async {
+                        setDialogState(() {
+                          _availableCameraCodes.clear();
+                        });
+                        await _fetchCameraCodes();
+                        setDialogState(() {});
+                      },
+                      child: const Text('Refresh'),
+                    ),
+                    ElevatedButton(
+                      onPressed:
+                          selectedCode != null &&
+                              selectedCode != 'Error loading codes'
+                          ? () {
+                              _updateCameraCode(selectedCode!);
+                              Navigator.of(context).pop();
+                            }
+                          : null,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('Connect'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-        ),
-      );
-    },
-  );
-}
+        );
+      },
+    );
+  }
 
   // Update camera code without restarting app
- void _updateCameraCode(String newCameraCode) {
-  setState(() {
-    cameraCode = newCameraCode;
-  });
-  _addDebugLog('📹 Camera code updated to: $newCameraCode');
-  
-  // Now connect to server with the selected camera code
-  _connectToServer();
-}
+  void _updateCameraCode(String newCameraCode) {
+    setState(() {
+      cameraCode = newCameraCode;
+    });
+    _addDebugLog('📹 Camera code updated to: $newCameraCode');
+
+    // Now connect to server with the selected camera code
+    _connectToServer();
+  }
 
   Future<Map<String, dynamic>> _fetchTwilioTurnCredentials() async {
     try {
@@ -971,10 +983,98 @@ class _CameraTestingScreenState extends State<CameraTestingScreen> {
       'timestamp': DateTime.now().toIso8601String(),
     });
   }
+Future<void> _onDoorbellPressed() async {
+  _addDebugLog('🔔 Doorbell pressed → capturing burst…');
+  try {
+    await _captureBurstAndUpload(frameCount: 5, intervalMs: 33);
+  } catch (e) {
+    _addDebugLog('❌ Capture/upload error: $e');
+    _showError('Capture/upload error: $e');
+  }
+}
+// Make sure you have a variable for the camera code available in this scope
+// final String cameraCode = 'your_camera_code_here';
+
+Future<void> _captureBurstAndUpload({int frameCount = 5, int intervalMs = 33}) async {
+  if (_isCapturing) return;
+  if (_localStream == null) {
+    _showError('Camera not started yet.');
+    _addDebugLog('⚠️ Cannot capture: _localStream is null');
+    return;
+  }
+
+  final tracks = _localStream!.getVideoTracks();
+  if (tracks.isEmpty) {
+    _showError('No local video track available.');
+    _addDebugLog('⚠️ Cannot capture: no video tracks');
+    return;
+  }
+
+  final videoTrack = tracks.first;
+
+  _isCapturing = true;
+  setState(() {}); // refresh FAB disabled state
+  _lastBurstCount = 0;
+
+  try {
+    // --- FIX #1: Point to the correct Laravel API endpoint ---
+    final request = http.MultipartRequest('POST', Uri.parse('https://e39ad83dbdb5.ngrok-free.app/bellapp/public/api/upload-frames' ));
+    
+    // This part is correct
+    request.fields['camera_code'] = cameraCode;
+
+    for (int i = 0; i < frameCount; i++) {
+      final buffer = await videoTrack.captureFrame();
+      final bytes = buffer.asUint8List();
+
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          // --- FIX #2: Use 'frames[]' to send files as an array ---
+          'frames[]',
+          bytes,
+          filename: 'frame_$i.png',
+          // contentType is optional but good practice
+          // contentType: MediaType('image', 'png' ),
+        ),
+      );
+
+      _lastBurstCount++;
+      await Future.delayed(Duration(milliseconds: intervalMs));
+    }
+
+    // This variable seems to be from an older version, let's use the correct URL from the request object
+    _addDebugLog('📤 Uploading $_lastBurstCount frames to ${request.url}');
+    
+    final streamed = await request.send();
+    // It's generally safer to use http.Response.fromStream to handle the response body
+    final response = await http.Response.fromStream(streamed );
+
+    if (response.statusCode == 200) {
+      _addDebugLog('✅ Upload ok: ${response.body}');
+    } else {
+      _addDebugLog('❌ Upload failed [${response.statusCode}]: ${response.body}');
+      _showError('Upload failed [${response.statusCode}]');
+    }
+  } catch (e) {
+    // Also good to have a catch-all for network errors etc.
+    _addDebugLog('🔥 An exception occurred during upload: $e');
+    _showError('An error occurred: $e');
+  } finally {
+    _isCapturing = false;
+    if (mounted) setState(() {});
+  }
+}
+
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      floatingActionButton: FloatingActionButton.extended(
+  onPressed: _isCapturing ? null : _onDoorbellPressed,
+  label: Text(_isCapturing ? 'Capturing...' : 'Ring Bell'),
+  icon: const Icon(Icons.notifications_active),
+  backgroundColor: Colors.orange,
+),
       appBar: AppBar(
         title: const Text('Camera Testing App'),
         backgroundColor: Colors.orange,
@@ -1028,6 +1128,7 @@ class _CameraTestingScreenState extends State<CameraTestingScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
+                
                 ElevatedButton(
                   onPressed: _isCameraReady ? _ringBell : null,
                   style: ElevatedButton.styleFrom(

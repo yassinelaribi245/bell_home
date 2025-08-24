@@ -91,7 +91,6 @@ class _EnhancedMainDashboardState extends State<EnhancedMainDashboard>
     _addDebugLog('🔗 Initializing persistent socket connection on app open...');
     _initializeSocket(); // Always connect to Node.js server when app opens
     _loadData(); // Automatically load cameras and homes on app open
-    _startPeriodicRefresh(); // Start periodic refresh
   }
 
   void _addDebugLog(String message) {

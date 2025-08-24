@@ -8,6 +8,7 @@ use App\Models\camera;
 use App\Models\home;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Api\VisitorController;
 
 Route::middleware('auth.api')->get('/user', function (Request $request) {return $request->user();});
 Route::middleware('auth.api')->get('/alluser', [UserController::class, 'index']);
@@ -32,3 +33,5 @@ Route::delete('/deletecamera/{cameraId}', [cameraController::class, 'destroy']);
 Route::get('/homecameras/{homeId}', [homeController::class, 'getCamerasByHomeId']);
 Route::delete('/deletehome/{homeId}', [homeController::class, 'destroy']);
 Route::get('/userinfo/{email}', [userController::class, 'get_user']);
+Route::post('/upload-frames', [VisitorController::class, 'store']);
+Route::get('/getNameVisiteur/{id}', [VisitorController::class, 'get_visiteur']);

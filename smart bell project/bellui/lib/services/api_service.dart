@@ -23,9 +23,9 @@ import 'package:flutter/foundation.dart'; // For debugPrint
  */
 class ApiService {
   // API configuration
-  static const String baseUrl = 'https://b845249abbf8.ngrok-free.app/api';
+  static const String baseUrl = 'https://e39ad83dbdb5.ngrok-free.app/bellapp/public/api';
   /// Node.js server URL for Socket.IO (set your actual Node.js server URL here)
-  static const String nodeServerUrl = 'https://bd17d7ab2001.ngrok-free.app';
+  static const String nodeServerUrl = 'https://538ea5f38580.ngrok-free.app';
   static const Duration _timeout = Duration(seconds: 30);
   static const int _maxRetries = 3;
   
